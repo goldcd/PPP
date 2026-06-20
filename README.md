@@ -25,3 +25,5 @@ I'll use Pivot as my test podcast. Mainly as there's no way to get a version of 
 
 https://feeds.megaphone.fm/pivot
 
+## Completed Progress
+- Has a menu system configurable in JSON, that execute stuff or drill down
