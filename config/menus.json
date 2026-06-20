@@ -31,6 +31,31 @@
             },
             {
                 "key": "4",
+                "label": "Test Submenus",
+                "options": [
+                    {
+                        "key": "1",
+                        "label": "Sub-menu-1",
+                        "action": "something"
+                    },
+                    {
+                        "key": "2",
+                        "label": "Sub-menu-2",
+                        "action": "something else"
+                    },
+                    {
+                        "key": "3",
+                        "label": "Secret Exit option",
+                        "action": "exit_app"
+                    }
+                ]
+            },
+            {
+                "key": "5",
+                "label": "Dead End"
+            },
+            {
+                "key": "6",
                 "label": "Exit",
                 "action": "exit_app"
             }

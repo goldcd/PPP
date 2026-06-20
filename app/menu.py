@@ -10,11 +10,17 @@ class Menu():
     ##When i initialize it, I want it to read in the menus.json file.
     def __init__(self):
         self.menu = json.load(open("config/menus.json"))
+        ## The current menu state - starts at the root, but want to change this to let people drill down
+        self.depth = self.menu["root"]
 
     def display_menu(self):
         ## Display the menu I've put in my menus.json
-        for option in self.menu["root"]["options"]:
+        for option in self.depth["options"]:
             print(f"{option['key']}: {option['label']}")
+
+        ## If we've moved from the initial root set, add an extra option to go back to the root menu
+        if (self.depth != self.menu["root"]):
+            print("0: Go back to main menu")
        
         ##Now make the user pick one
         choice = input("Enter your choice: ")
@@ -24,16 +30,37 @@ class Menu():
              
 
     def get_selection(self, choice):
-        ## Check the menu file to ensure they've actually picked a valid option.
-        valid_keys = [option["key"] for option in self.menu["root"]["options"]]
+        
+        ## A bit hacky, but we're going to assume if they enter a 0, they want to go back to the main menu
+        if choice == "0":
+            self.depth = self.menu["root"]
+            self.display_menu()
+            return
+        ## If it wasn't a 0, then just go on as we did before, actually drilling down and seeing what they selected
+        
+        ## Check the menu file to see what the current valid options are for the user
+        valid_keys = [option["key"] for option in self.depth["options"]]
 
-        ## Later on I want to add sub-menus to this, but..that's for another day
+        ##If the user can't pick a valid option, they deserve a crash, but I'll be nice
+        if choice not in valid_keys:
+            print(f"Invalid choice: {choice}")
+            self.display_menu()
+            return
 
         ##Find out what they tried to trigger
-        for selection in self.menu["root"]["options"]:
+        for selection in self.depth["options"]:
             if selection["key"] == choice:
-                self.execute_selection(selection['action'])
-        ##Now re-draw the menu
+                ##If we find an action, then we should execute it 
+                if selection.get('action'):
+                    ## Try to execute this
+                    self.execute_selection(selection['action'])
+                elif selection.get('options'):
+                    #Update our position in the menu structure
+                    self.depth = selection
+                else:
+                    print("We seem to have a menu issue where we have no actions or sub-options")
+
+        ##Now re-draw the menu - if I get the submenus working, then we should be able to drill down
         self.display_menu()
 
     def execute_selection(self, action):
