@@ -10,7 +10,7 @@
             {
                 "key": "2",
                 "label": "Add RSS Feed",
-                "action": "test_stub"
+                "action": "call_add_RSS"
             },
             {
                 "key": "3",
