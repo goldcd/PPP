@@ -14,19 +14,22 @@ class Menu():
         self.depth = self.menu["root"]
 
     def display_menu(self):
-        ## Display the menu I've put in my menus.json
-        for option in self.depth["options"]:
-            print(f"{option['key']}: {option['label']}")
+        
+        ## Putting the menu in a while loop. Previously I was recursively calling this function. But this is a lot cleaner
+        while True:
+            ## Display the menu I've put in my menus.json
+            for option in self.depth["options"]:
+                print(f"{option['key']}: {option['label']}")
 
-        ## If we've moved from the initial root set, add an extra option to go back to the root menu
-        if (self.depth != self.menu["root"]):
-            print("0: Go back to main menu")
-       
-        ##Now make the user pick one
-        choice = input("Enter your choice: ")
+            ## If we've moved from the initial root set, inject an extra option at the bottom to go back to the root menu
+            if (self.depth != self.menu["root"]):
+                print("0: Go back to main menu")
+        
+            ##Now make the user pick one
+            choice = input("Enter your choice: ")
 
-        ##Handle the choice
-        self.get_selection(choice)
+            ##Handle the choice
+            self.get_selection(choice)
              
 
     def get_selection(self, choice):
@@ -34,7 +37,6 @@ class Menu():
         ## A bit hacky, but we're going to assume if they enter a 0, they want to go back to the main menu
         if choice == "0":
             self.depth = self.menu["root"]
-            self.display_menu()
             return
         ## If it wasn't a 0, then just go on as we did before, actually drilling down and seeing what they selected
         
@@ -44,7 +46,6 @@ class Menu():
         ##If the user can't pick a valid option, they deserve a crash, but I'll be nice
         if choice not in valid_keys:
             print(f"Invalid choice: {choice}")
-            self.display_menu()
             return
 
         ##Find out what they tried to trigger
@@ -59,9 +60,6 @@ class Menu():
                     self.depth = selection
                 else:
                     print("We seem to have a menu issue where we have no actions or sub-options")
-
-        ##Now re-draw the menu - if I get the submenus working, then we should be able to drill down
-        self.display_menu()
 
     def execute_selection(self, action):
         print(f"Running {action}")
