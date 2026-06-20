@@ -4,16 +4,21 @@
         "options": [
             {
                 "key": "1",
+                "label": "View RSS Feeds",
+                "action": "view_process"
+            },
+            {
+                "key": "2",
                 "label": "Add RSS Feed",
                 "action": "import_process"
             },
             {
-                "key": "2",
+                "key": "3",
                 "label": "Remove RSS Feed",
                 "action": "delete_process"
             },
             {
-                "key": "3",
+                "key": "4",
                 "label": "Exit",
                 "action": "exit_app"
             }

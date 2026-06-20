@@ -1,1 +1,6 @@
 AI_CONTEXT.md
+data/
+.vscode/
+__pycache__/
+*.pyc
+.venv/
