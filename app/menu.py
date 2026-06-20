@@ -1,7 +1,7 @@
 import json
 import os
 ##os.system('cls' if os.name == 'nt' else 'clear')##Use this to clear the screen, but not sure where I want to do this yet
-
+from app import actions
 
 ## Class to handle the menu interactions
 class Menu():
@@ -27,13 +27,23 @@ class Menu():
         ## Check the menu file to ensure they've actually picked a valid option.
         valid_keys = [option["key"] for option in self.menu["root"]["options"]]
 
-        if choice in valid_keys:
-            print ("Hurrah, you're not a fuckwit!")
-        else:
-            print ("You are a fuckwit")
-        
-        ## For now, just re-draw the menu.
-        ## Later on I want to add sub-menus to this, but..abs
+        ## Later on I want to add sub-menus to this, but..that's for another day
 
+        ##Find out what they tried to trigger
+        for selection in self.menu["root"]["options"]:
+            if selection["key"] == choice:
+                self.execute_selection(selection['action'])
         ##Now re-draw the menu
         self.display_menu()
+
+    def execute_selection(self, action):
+        print(f"Running {action}")
+        ##Now see if this action is in actions.py
+        func = getattr(actions, action, None)
+        
+        ##If it's a callable function, run it
+        if func and callable(func):
+            func()
+        else:
+            print(f"Action '{action}' is not defined in actions.py")
+            
