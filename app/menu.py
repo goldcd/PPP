@@ -12,11 +12,20 @@ class Menu():
         self.menu = json.load(open("config/menus.json"))
         ## The current menu state - starts at the root, but want to change this to let people drill down
         self.depth = self.menu["root"]
+        self.last_error = None
 
     def display_menu(self):
         
         ## Putting the menu in a while loop. Previously I was recursively calling this function. But this is a lot cleaner
         while True:
+            #Clear the screen
+            os.system('cls' if os.name == 'nt' else 'clear')
+
+            ##If a previous attempt to do something raised an error - show it here, then clear it
+            if self.last_error:
+                print(f"Error: {self.last_error}")
+                self.last_error = None
+
             ## Display the menu I've put in my menus.json
             for option in self.depth["options"]:
                 print(f"{option['key']}: {option['label']}")
@@ -45,7 +54,7 @@ class Menu():
 
         ##If the user can't pick a valid option, they deserve a crash, but I'll be nice
         if choice not in valid_keys:
-            print(f"Invalid choice: {choice}")
+            self.last_error=f"Invalid choice: {choice}"
             return
 
         ##Find out what they tried to trigger
@@ -59,7 +68,7 @@ class Menu():
                     #Update our position in the menu structure
                     self.depth = selection
                 else:
-                    print("We seem to have a menu issue where we have no actions or sub-options")
+                    self.last_error=f"We seem to have a menu issue where we have no actions or sub-options"
 
     def execute_selection(self, action):
         print(f"Running {action}")
@@ -69,6 +78,8 @@ class Menu():
         ##If it's a callable function, run it
         if func and callable(func):
             func()
+            #If we run something that might generate output, we should let the user see this, before we return to the menu loop (which will refresh the screen)
+            input("\nPress Enter to continue")
         else:
-            print(f"Action '{action}' is not defined in actions.py")
+            self.last_error=f"Action '{action}' is not defined in actions.py"
             

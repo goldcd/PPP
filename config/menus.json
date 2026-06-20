@@ -10,7 +10,7 @@
             {
                 "key": "2",
                 "label": "Add RSS Feed",
-                "action": "import_process"
+                "action": "test_stub"
             },
             {
                 "key": "3",

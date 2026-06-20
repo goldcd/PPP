@@ -2,3 +2,12 @@
 def exit_app():
     print("Thank you. Come again!")
     exit()
+
+def test_stub():
+    print("""
+    ________________________________________________________
+    
+        Imagine what exciting code could be here!!!
+    ________________________________________________________
+   
+    """)
