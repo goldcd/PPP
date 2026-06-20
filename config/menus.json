@@ -1,0 +1,22 @@
+{
+    "root": {
+        "title": "Main Menu",
+        "options": [
+            {
+                "key": "1",
+                "label": "Add RSS Feed",
+                "action": "import_process"
+            },
+            {
+                "key": "2",
+                "label": "Remove RSS Feed",
+                "action": "delete_process"
+            },
+            {
+                "key": "3",
+                "label": "Exit",
+                "action": "exit_app"
+            }
+        ]
+    }
+}
