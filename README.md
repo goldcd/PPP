@@ -23,7 +23,10 @@ Well I've no idea yet. But I'll stick stuff in here, as I develop..
 
 I'll use Pivot as my test podcast. Mainly as there's no way to get a version of it without adverts - so I'm guilt free
 
+At some point need to come up with a longer list, for testing
 https://feeds.megaphone.fm/pivot
+https://feeds.megaphone.fm/kermodeandmayo
+https://audioboom.com/channels/2399216.rss
 
 ## Completed Progress
 - Has a menu system configurable in JSON, that can either execute stuff or drill down into sub-menus.
