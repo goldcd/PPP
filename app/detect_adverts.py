@@ -76,10 +76,10 @@ def start_ollama():
     ## Work out which model we need, then try to get it from config, and fallback to defaults.. Seriously, there's got to be a better config mechanism
     ##AI says there is - but I'm not arsed enough yet. To copy and paste blindly is to be human
     if torch.cuda.is_available():
-        ollama_model = ollama_config.get("gpu_model", "gemma4:9b")
+        ollama_model = ollama_config.get("gpu_model", "gemma4:12b")
         print(f"\n Using GPU model '{ollama_model}' for advert detection \n")
     else:
-        ollama_model = ollama_config.get("cpu_model", "gemma4:2b")
+        ollama_model = ollama_config.get("cpu_model", "gemma4:e2b")
         print(f"\n Using CPU model '{ollama_model}' for advert detection \n")
     
     # Pre-warm/load the model into memory

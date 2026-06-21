@@ -21,5 +21,5 @@ model_to_use = "small.en"
 #We're using Ollama to detect the adverts. i.e. These are separate models to transcribing configured above
 ollama_url = "http://localhost:11434/api/chat"
 #Mode to use for detecting adverts, based on whether it's GPU or not
-gpu_model = "gemma4:9b"
-cpu_model = "gemma4:2b"
+gpu_model = "gemma4:12b"
+cpu_model = "gemma4:e2b"
