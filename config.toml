@@ -6,4 +6,9 @@
 #This can be manually tweaked in data/feeds.json
 initial_podcast_lookback = 7
 
+[transcribe]
+# Whisper model to use. Options: "tiny", "base", "small", "medium", "large"
+# Append ".en" (e.g., "small.en") for faster, more accurate English-only transcription.
+model_to_use = "small.en"
+
 

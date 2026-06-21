@@ -5,7 +5,7 @@
 
 from app.RSS_Handler import add_RSS, view_RSS, delete_RSS
 from app.download import download
-from app.transcribe import transcribe
+from app.transcribe import transcribe_all
 
 def call_add_RSS():
     add_RSS()
@@ -20,7 +20,7 @@ def call_download():
     download()
 
 def call_transcribe():
-    transcribe()
+    transcribe_all()
 
 ##First very simple action - just trigger this to close the app
 def exit_app():
