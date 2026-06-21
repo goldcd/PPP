@@ -36,27 +36,65 @@ def add_RSS():
     ##First open it
     feeds = get_feed_file()
 
-    ##Check it's not already there
-    if feeds.get(title):
-        print(f"{title} is already in the feeds file.")
-        return
+  
+    ##I'm going to need to iterate through the values to check if it's there, as the key is now the ID
+    for feed in feeds:
+        if feed["title"] == title:
+            print(f"{title} is already in the feeds file.")
+            return
+    
+   
+    ##Get any existing IDs, then iterate through them until you find a space (i.e. we'll fill any gaps we create by deleting)
+    used_ids = {feed["id"] for feed in feeds}
+    nextID = 1
+    while nextID in used_ids:
+        nextID += 1
     
     ##Now we can add it
-    feeds[title]={"url":rss_url}
+    feeds.append({"id":nextID,"title":title,"url":rss_url})
     
     ##And finally save it back to file
     save_feed_file(feeds)
 
     print(f"Added {title} to the feeds file.")
         
+def view_RSS():
+    ##Initialize our storage file for our RSS feeds
+    initialize_feed_file()
+    feeds = get_feed_file()
 
+    for feed in feeds:
+        print(f"{feed['id']}: {feed['title']}")
+
+def delete_RSS():
+    ##Use View function to display the feeds
+    view_RSS()
+    ##Now ask the user which ID they want to delete.
+    id_to_delete = input("Enter the ID of the feed you want to delete:")
+    ##Check it's an integer
+    if not id_to_delete.isdigit():
+        print("Invalid ID. Please enter a number.")
+        return
+    ##Convert it to an integer
+    id_to_delete = int(id_to_delete)
+    ##Open the file
+    feeds = get_feed_file()
+    ##Check if the ID exists
+    if id_to_delete not in {feed["id"] for feed in feeds}:
+        print("ID not found.")
+        return
+    ##Remove the feed
+    feeds = [feed for feed in feeds if feed["id"] != id_to_delete]
+    ##Save the file
+    save_feed_file(feeds)
+    print(f"Deleted feed with ID {id_to_delete}.")
     
 
 def initialize_feed_file():
     ##If we don't have a file for our RSS feeds, then create one 
     if not os.path.exists("data/feeds.json"):
         f = open("data/feeds.json", "w")
-        f.write("{}")
+        f.write("[]")
         f.close()
         print("Created a new feeds.json file.")
     else:

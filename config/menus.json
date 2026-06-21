@@ -5,7 +5,7 @@
             {
                 "key": "1",
                 "label": "View RSS Feeds",
-                "action": "view_process"
+                "action": "call_view_RSS"
             },
             {
                 "key": "2",
@@ -15,7 +15,7 @@
             {
                 "key": "3",
                 "label": "Remove RSS Feed",
-                "action": "delete_process"
+                "action": "call_delete_RSS"
             },
             {
                 "key": "4",
