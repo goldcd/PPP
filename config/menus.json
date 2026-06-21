@@ -36,11 +36,16 @@
                         "key": "2",
                         "label": "Transcribe Podcasts",
                         "action": "call_transcribe"
+                    },
+                    {
+                        "key": "3",
+                        "label": "Detect Adverts",
+                        "action": "call_detect_adverts"
                     }
                 ]
             },
             {
-                "key": "4",
+                "key": "3",
                 "label": "Trigger All Podcast Processing",
                 "action": "call_process_all"
             },

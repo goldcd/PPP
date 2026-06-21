@@ -2,22 +2,48 @@
 
 ## Purpose
 
-To generate a personal project to prove I actually learnt something on my course.
+Goal of this app is to provide a proxy for your podcasts, which will modify the raw feed in useful ways - initially advert removal
 
 ## Scope
 
-This project will create a proxy server for podcasts, which will enable me to enrich/improve them in a number of ways.
+The current scope is to:
+- Allow you to onboard a public RSS podcast feed
+- Trigger a local download of this feed (defaults to last 7 days of episodes)
+- Generate an SRT transcription of each episode
+- Parse transcription to detect advert segments
+- Generate a 'cleaned' version of the podcast with these segments excised
+- Provide a server that allows you to subscribe this cleaned feed.
 
-The actual improvements will undoubtedly change over time as I develop the project, but as of now, I can think of the following:
 
-- Generate Transcripts of the podcast.
-- Generate a summary of the podcast
-- Generate bookmarks to topics within the podcast
-- Generate an exited version of the podcast, with adverts excised.
+
+## Prerequisites
+
+- Python (run script should create venv)
+- Disk space (run script will be downloading models, plus whatever you need for your podcasts
+- nVidia GPU ideally, but should fall back to CPU (fast on Apple, not fast on anything else)
+- Ollama
+
 
 ## Usage
-Well I've no idea yet. But I'll stick stuff in here, as I develop..
 
+- run.bat/sh launches the application
+- "Manage Podcast Feeds" allows you to view/add/delete RSS feeds. 
+  - This is persisted \data\feeds.json
+  - Defaults lookback period to 7 days (can change this in config)
+- "Manage Podcast Processing"
+  - Download
+    - Retrieves latest version of public RSS feed to data\<podcast id>\raw
+    - Downloads podcast mp3s (unless older than lookback or already downloaded)
+  - Transcribe 
+    - Generates ,srt transcription in data\<podcast id> for all podcasts without one
+- "Trigger All Podcast Processing"
+  - Executes all of the "Manage Podcast Processing" options in order
+  
+  
+## Known Issues / Limitations
+
+- Current versions isn't designed to operate from the CLI. I'll add this later, so this can more easily be run in the background/automated.
+- Assumes Ollama is installed locally on default port
 
 ## Scratchpad
 
@@ -30,12 +56,4 @@ https://feeds.megaphone.fm/kermodeandmayo
 
 https://audioboom.com/channels/2399216.rss
 
-## Completed Progress
-- Has a menu system configurable in JSON, that can either execute stuff or drill down into sub-menus.
-- You can now add/remove podcast feeds 
-- It will download them (defaults to less than 7 days old, but you can change this in settings)
-- Let AI implement the pre-reqs handling, as I neither understood it, nor particularly wished to
-- Added venv to the launchers, as it was getting messy 
-
-## Known Issues
 - 

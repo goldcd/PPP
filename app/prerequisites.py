@@ -7,6 +7,11 @@ import platform
 import subprocess
 import requests
 
+if sys.version_info >= (3, 11):
+    import tomllib as toml
+else:
+    import tomli as toml
+
 def is_command_installed(name):
     """Check if a CLI command is available on the system PATH."""
     return shutil.which(name) is not None
@@ -15,8 +20,19 @@ def is_python_package_installed(name):
     """Check if a Python library is installed in the current environment."""
     return importlib.util.find_spec(name) is not None
 
-def is_ollama_service_running(url="http://localhost:11434"):
+def is_ollama_service_running(url=None):
     """Check if the local Ollama background server is responding."""
+    if url is None:
+        url = "http://localhost:11434"
+        if os.path.exists("config.toml"):
+            try:
+                with open("config.toml", "rb") as f:
+                    config = toml.load(f)
+                url = config.get("ollama", {}).get("ollama_url", url)
+            except Exception:
+                pass
+    if "/api/" in url:
+        url = url.split("/api/")[0]
     try:
         response = requests.get(url, timeout=1)
         return response.status_code == 200

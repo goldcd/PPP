@@ -6,6 +6,8 @@
 #This can be manually tweaked in data/feeds.json
 initial_podcast_lookback = 7
 
+
+
 [transcribe]
 # (Faster)Whisper model to use. Options: "tiny", "base", "small", "medium", "large"
 # Append ".en" (e.g., "small.en") for faster, more accurate English-only transcription.
@@ -15,3 +17,9 @@ initial_podcast_lookback = 7
 model_to_use = "small.en"
 
 
+[ollama]
+#We're using Ollama to detect the adverts. i.e. These are separate models to transcribing configured above
+ollama_url = "http://localhost:11434/api/chat"
+#Mode to use for detecting adverts, based on whether it's GPU or not
+gpu_model = "gemma4:9b"
+cpu_model = "gemma4:2b"

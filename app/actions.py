@@ -6,6 +6,7 @@
 from app.RSS_Handler import add_RSS, view_RSS, delete_RSS
 from app.download import download
 from app.transcribe import transcribe_all
+from app.detect_adverts import detect_all_adverts
 
 def call_add_RSS():
     add_RSS()
@@ -22,11 +23,15 @@ def call_download():
 def call_transcribe():
     transcribe_all()
 
+def call_detect_adverts():
+    detect_all_adverts()
+
 ## Get new podcasts and do all the processing - option I presume will be used most of the time
 def call_process_all():
     download()
     transcribe_all()
-    
+    detect_all_adverts()
+
 
 ##First very simple action - just trigger this to close the app
 def exit_app():
