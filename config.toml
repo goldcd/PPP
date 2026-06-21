@@ -6,7 +6,7 @@
 
 [RSS_Import]
 #When adding a new podcast feed, how many days back should we initially consider?
-#This can be manually tweaked in data/feeds.json
+#This can be manually altered later in data/feeds.json, if you didn't notice this setting before
 initial_podcast_lookback = 7
 
 [transcribe]

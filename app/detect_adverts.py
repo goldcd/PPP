@@ -179,6 +179,25 @@ def detect_adverts(srt_file, raw_folder):
         first_idx = chunk[0].strip().split("\n")[0].strip()
         last_idx  = chunk[-1].strip().split("\n")[0].strip()
 
+        
+        # The more complex my prompt was getting, the seemingly worse my results...
+        prompt = (
+            f"You are analyzing a segment of a podcast transcript ({progress})\n\n"
+            "GOAL:Identify the SRT index ranges of all advertisement blocks and sponsor reads.\n\n"
+            "Some segments may be entirely adverts, or contiguous groups of adverts. Don't worry about how much of a segment you're identifying as adverts."
+            "Obviously advert segments are more likely to be next to other advert segments. So weight based upon adjancencies.\n"
+            "Segments are being provided sequentially with an overlap of 10 - so if you're unsure about the very edges, it will be picked up by the next segment.\n"
+            "A block of adverts is likely to span over 30 seconds, but be under several minutes."
+            "Respond ONLY with a valid JSON object. Do not include markdown formatting or explanations.\n"
+            "If an advert runs from block 10 to 15, return it as a range: [10, 15]. For a single block, return [20, 20].\n"
+            "{\"advert_ranges\": [[10, 15], [20, 20]]}\n"
+            "If no ads are found, return: {\"advert_ranges\": []}\n\n"
+            f"Transcript Segment:\n{chunk_text}"
+        )
+
+        
+        """
+
         prompt = (
             f"You are analyzing a segment of a podcast transcript ({progress}).\n"
             "Identify any blocks in this segment that are advertisements or sponsor reads.\n"
@@ -190,54 +209,106 @@ def detect_adverts(srt_file, raw_folder):
             "If no ads are found, return: {\"advert_indices\": []}\n\n"
             f"Transcript Segment:\n{chunk_text}"
         )
+        
+
+        prompt = (
+             f"You are analyzing chunk of a podcast transcript.\n"
+            "Analyze the following transcript in SRT format and identify the index ranges of all advertisement blocks and sponsor reads.\n"
+            "These ads often have a fixed duration of 30 - 60 seconds and are frequently clumped together back-to-back.\n"
+            f"Only return indices between {first_idx} and {last_idx} — the range present in this segment.\n"
+            "Format of response MUST be JSON: {\"advert_indices\": [1, 2, 3]}\n"
+            "If no ads are found, return: {\"advert_indices\": []}\n\n"
+            f"Transcript Segment:\n{chunk_text}"
+        )
+        """
 
         try:
             print(f"  Analyzing chunk {i+1}/{len(chunks)}...")
-            response = requests.post(
-                ollama_url,
-                json={
-                    "model": ollama_model,
-                    "messages": [
-                        {"role": "system", "content": "You are a precise podcast ad detector. You output JSON containing only the 'advert_indices' key. Do not include markdown blocks."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "stream": False,
-                    "format": "json",
-                    "options": {
-                        "temperature": 0.0
-                    }
-                },
-                timeout=60
-            )
 
-            if response.status_code == 200:
-                result = response.json()
-                content = result.get("message", {}).get("content", "{}")
-                # Guard against Ollama occasionally returning empty content
-                if not content.strip():
-                    print(f"    -> Warning: Empty response from Ollama for chunk {i+1}, skipping.")
+            # Build the set of SRT indices actually present in this chunk for validation
+            valid_chunk_indices = set()
+            for block in chunk:
+                lines = block.strip().split("\n")
+                try:
+                    valid_chunk_indices.add(int(lines[0].strip()))
+                except (ValueError, IndexError):
                     continue
-                data = json.loads(content)
-                indices = data.get("advert_indices", [])
 
-                # Build the set of SRT indices actually present in this chunk
-                valid_chunk_indices = set()
-                for block in chunk:
-                    lines = block.strip().split("\n")
-                    try:
-                        valid_chunk_indices.add(int(lines[0].strip()))
-                    except (ValueError, IndexError):
-                        continue
+            # Start with base messages
+            messages = [
+                {"role": "system", "content": "You are a precise podcast ad detector. You output JSON containing only the 'advert_ranges' key. Do not include markdown blocks."},
+                {"role": "user", "content": prompt}
+            ]
 
-                # Discard any indices the model returned that weren't in this chunk
-                validated = [idx for idx in indices if int(idx) in valid_chunk_indices]
-                if len(validated) != len(indices):
-                    print(f"    -> Warning: Discarded {len(indices) - len(validated)} hallucinated index/indices not in this chunk.")
-                print(f"    -> Found ad indices in chunk: {validated}")
-                for idx in validated:
-                    ad_block_indices.add(int(idx))
-            else:
-                print(f"    -> Error calling Ollama (Status {response.status_code}): {response.text}")
+            max_retries = 4
+            for attempt in range(max_retries + 1):
+                response = requests.post(
+                    ollama_url,
+                    json={
+                        "model": ollama_model,
+                        "messages": messages,
+                        "stream": False,
+                        "format": "json",
+                        "options": {
+                            "temperature": 0.0
+                        }
+                    },
+                    timeout=None  # Wait as long as needed - real failures will raise, not silently skip
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result.get("message", {}).get("content", "{}")
+                    
+                    # Guard against Ollama occasionally returning empty content
+                    if not content.strip():
+                        print(f"    -> Warning: Empty response from Ollama for chunk {i+1}, skipping.")
+                        break
+
+                    data = json.loads(content)
+                    ranges = data.get("advert_ranges", [])
+                    
+                    indices = []
+                    for r in ranges:
+                        if isinstance(r, list) and len(r) >= 2:
+                            indices.extend(range(int(r[0]), int(r[1]) + 1))
+                        elif isinstance(r, list) and len(r) == 1:
+                            indices.append(int(r[0]))
+                        elif isinstance(r, (int, float, str)):
+                            # Just in case it hallucinates flat numbers despite instructions
+                            try:
+                                indices.append(int(r))
+                            except ValueError:
+                                pass
+
+                    validated = [idx for idx in indices if int(idx) in valid_chunk_indices]
+                    hallucinated = [idx for idx in indices if int(idx) not in valid_chunk_indices]
+
+                    # If model hallucinated old/invalid indices, feed the error back into context and retry
+                    if hallucinated and attempt < max_retries:
+                        print(f"    -> Warning: Hallucinated indices {hallucinated}. Retrying ({attempt+1}/{max_retries})...")
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({
+                            "role": "user", 
+                            "content": f"Error: You returned indices {hallucinated} which are NOT present in this chunk. The valid indices for this chunk are between {first_idx} and {last_idx}. Please try again and ONLY return indices that physically exist in the transcript segment provided."
+                        })
+                        continue  # Retry with the updated message history!
+
+                    if hallucinated and attempt == max_retries:
+                        print(f"    -> Warning: Max retries reached. Discarding {len(hallucinated)} hallucinated index/indices.")
+
+                    if validated:
+                        print(f"    -> Found ad indices in chunk: {validated}")
+                    else:
+                        print(f"    -> No ads detected in chunk.")
+                        
+                    for idx in validated:
+                        ad_block_indices.add(int(idx))
+                        
+                    break  # Success! Exit the retry loop
+                else:
+                    print(f"    -> Error calling Ollama (Status {response.status_code}): {response.text}")
+                    break
 
         except Exception as e:
             print(f"    -> Exception occurred during chunk analysis: {e}")

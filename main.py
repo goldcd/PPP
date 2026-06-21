@@ -5,7 +5,6 @@ from app.prerequisites import check_prerequisites
 def main():
     print("Welcome to PPP!")
     ##Check prerequisites and warn if not met - This was AI, so don't blame me if it doesn't work..
-    print("Checking for prerequisites\n")
     check_prerequisites()
     ##Initialize the menu object
     menu = Menu()
