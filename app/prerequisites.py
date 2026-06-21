@@ -100,24 +100,28 @@ def check_prerequisites():
     missing_ffmpeg = not is_command_installed("ffmpeg")
     missing_ollama = not is_command_installed("ollama")
     
-    # Check for PyTorch CUDA support if Whisper is installed
+    # Check for PyTorch CUDA support if Whisper is installed, using a subprocess to avoid file locking
     missing_cuda_support = False
+    is_gpu_enabled = False
     if not missing_whisper:
-        try:
-            import torch
-            if is_command_installed("nvidia-smi") and not torch.cuda.is_available():
-                missing_cuda_support = True
-        except ImportError:
-            pass
+        if is_command_installed("nvidia-smi"):
+            try:
+                res = subprocess.run(
+                    [sys.executable, "-c", "import torch; print(torch.cuda.is_available())"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                cuda_available = res.stdout.strip() == "True"
+                if not cuda_available:
+                    missing_cuda_support = True
+                else:
+                    is_gpu_enabled = True
+            except Exception:
+                pass
 
     if not (missing_whisper or missing_ffmpeg or missing_ollama or missing_cuda_support):
-        # All command-line tools and Python packages found
-        try:
-            import torch
-            gpu_status = " (GPU enabled)" if torch.cuda.is_available() else ""
-        except ImportError:
-            gpu_status = ""
-            
+        gpu_status = " (GPU enabled)" if is_gpu_enabled else ""
         if not is_ollama_service_running() and not missing_ollama:
             print(f"[OK] Whisper: Found{gpu_status}")
             print("[OK] FFmpeg: Found")
@@ -166,13 +170,19 @@ def check_prerequisites():
         if not success:
             installation_success = False
         else:
-            # If we just installed whisper, check if we need to install CUDA support now
-            try:
-                import torch
-                if is_command_installed("nvidia-smi") and not torch.cuda.is_available():
-                    missing_cuda_support = True
-            except ImportError:
-                pass
+            # If we just installed whisper, check if we need to install CUDA support now (via subprocess)
+            if is_command_installed("nvidia-smi"):
+                try:
+                    res = subprocess.run(
+                        [sys.executable, "-c", "import torch; print(torch.cuda.is_available())"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if res.stdout.strip() != "True":
+                        missing_cuda_support = True
+                except Exception:
+                    pass
 
     if missing_cuda_support:
         success = reinstall_pytorch_with_cuda()

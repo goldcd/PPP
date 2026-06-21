@@ -1,7 +1,5 @@
 import os
 import sys
-import whisper
-import torch
 
 if sys.version_info >= (3, 11):
     import tomllib as toml
@@ -38,6 +36,8 @@ def transcribe_all():
 
 #I'm very proud of myself. I've actually separated out the logic here from the front end. Well done me!
 def transcribe(mp3_file, raw_folder):
+    import torch
+    import whisper
     ##This function will handle the transcribing of a single podcast file
     print(f"Now transcribing {mp3_file} in {raw_folder}")
 
@@ -46,12 +46,15 @@ def transcribe(mp3_file, raw_folder):
     #If you're team nvidia
     if torch.cuda.is_available():
         device = "cuda"
+        print("\n Using GPU to transcribe \n")
     ##a degenerate Apple fanboi
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = "mps"  
+        print("\n Using Apple Silicon GPU to transcribe \n")
     ##poor. Although I think you might be screwed when we later try to locally work out where the adverts are...
     else:
         device = "cpu"
+        print("\n Using CPU to transcribe - this will be brutally slow (realtime-ish, maybe) \n")
 
     ##Call Whisper to do the transcribing
     #Load the whisper model - exact model to use is specified in the config.toml file   

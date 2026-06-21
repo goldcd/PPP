@@ -9,6 +9,9 @@ initial_podcast_lookback = 7
 [transcribe]
 # Whisper model to use. Options: "tiny", "base", "small", "medium", "large"
 # Append ".en" (e.g., "small.en") for faster, more accurate English-only transcription.
+# Code will automatically use CUDA or Apple Silicon if available (and will tell you when you trigger a transcribe, which it's using)
+# small.en is about realtime on a CPU - maybe 20x faster on GPU
+# going up from small to large is roughly trebling the transcription time
 model_to_use = "small.en"
 
 

@@ -22,6 +22,12 @@ def call_download():
 def call_transcribe():
     transcribe_all()
 
+## Get new podcasts and do all the processing - option I presume will be used most of the time
+def call_process_all():
+    download()
+    transcribe_all()
+    
+
 ##First very simple action - just trigger this to close the app
 def exit_app():
     print("Thank you. Come again!")

@@ -33,4 +33,9 @@ https://audioboom.com/channels/2399216.rss
 ## Completed Progress
 - Has a menu system configurable in JSON, that can either execute stuff or drill down into sub-menus.
 - You can now add/remove podcast feeds 
-= It will download them (defaults to less than 7 days old, but you can change this in settings)
+- It will download them (defaults to less than 7 days old, but you can change this in settings)
+- Let AI implement the pre-reqs handling, as I neither understood it, nor particularly wished to
+- Added venv to the launchers, as it was getting messy 
+
+## Known Issues
+- 

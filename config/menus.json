@@ -25,13 +25,24 @@
             },
             {
                 "key": "2",
-                "label": "Grab New Podcasts",
-                "action": "call_download"
+                "label": "Manage Podcast Processing",
+                "options": [
+                    {
+                        "key": "1",
+                        "label": "Grab New Podcasts",
+                        "action": "call_download"
+                    },
+                    {
+                        "key": "2",
+                        "label": "Transcribe Podcasts",
+                        "action": "call_transcribe"
+                    }
+                ]
             },
             {
-                "key": "3",
-                "label": "Transcribe Podcasts",
-                "action": "call_transcribe"
+                "key": "4",
+                "label": "Trigger All Podcast Processing",
+                "action": "call_process_all"
             },
             {
                 "key": "5",
