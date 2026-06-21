@@ -118,6 +118,9 @@ def delete_RSS():
     
 
 def initialize_feed_file():
+    ##If the data folder doesn't exist, create it
+    if not os.path.exists("data"):
+        os.makedirs("data") 
     ##If we don't have a file for our RSS feeds, then create one 
     if not os.path.exists("data/feeds.json"):
         f = open("data/feeds.json", "w")

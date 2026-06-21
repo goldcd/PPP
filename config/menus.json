@@ -29,6 +29,11 @@
                 "action": "call_download"
             },
             {
+                "key": "3",
+                "label": "Transcribe Podcasts",
+                "action": "call_transcribe"
+            },
+            {
                 "key": "5",
                 "label": "Test Submenus",
                 "options": [
