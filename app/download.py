@@ -31,12 +31,13 @@ def download():
         ##Work out how far back in this feed we should be looking, based upon the syncfrom date in the feeds file
         syncfrom_date = datetime.datetime.fromisoformat(feed['syncFrom'])
 
+        import email.utils
         ## Iterate through the rss.xml entries and process any that are newer than our syncfrom date
         for item in root.findall("channel/item"):
             pubdate = item.find("pubDate").text
             
             # Parse the pubDate, and strip timezone info to make it naive for comparison
-            pubdate = datetime.datetime.strptime(pubdate, "%a, %d %b %Y %H:%M:%S %z").replace(tzinfo=None)
+            pubdate = email.utils.parsedate_to_datetime(pubdate).replace(tzinfo=None)
             
             if pubdate > syncfrom_date:
 

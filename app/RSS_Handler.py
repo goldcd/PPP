@@ -131,6 +131,7 @@ def initialize_feed_file():
         print("Existing feeds.json found")
 
 def get_feed_file():
+    initialize_feed_file()
     with open("data/feeds.json", "r") as f:
         return json.load(f)
 

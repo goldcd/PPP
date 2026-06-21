@@ -49,48 +49,54 @@ def transcribe_all():
 
 #I'm very proud of myself. I've actually separated out the logic here from the front end. Well done me!
 def transcribe(mp3_file, raw_folder):
+    #Didn't like it when I imported these with the package
     import torch
-    import whisper
-    ##This function will handle the transcribing of a single podcast file
+    from faster_whisper import WhisperModel
+    
     print(f"Now transcribing {mp3_file} in {raw_folder}")
 
     ##See if the user has a GPU installed and use this to determine what device whisper will use.
 
-    #If you're team nvidia
+    ##If you're team nvidia
     if torch.cuda.is_available():
         device = "cuda"
+        compute_type = "float16"
         print("\n Using GPU to transcribe \n")
-    ##a degenerate Apple fanboi
+    ##a degenerate Apple fanboi (faster-whisper/ctranslate2 doesn't support MPS GPU yet, but CPU is extremely fast on Apple Silicon)
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"  
-        print("\n Using Apple Silicon GPU to transcribe \n")
+        device = "cpu"
+        compute_type = "int8"
+        print("\n Using CPU - but I think you're on Apple, so it should be OK \n")
     ##poor. Although I think you might be screwed when we later try to locally work out where the adverts are...
     else:
         device = "cpu"
-        print("\n Using CPU to transcribe - this will be brutally slow (realtime-ish, maybe) \n")
+        compute_type = "int8"
+        print("\n Using CPU to transcribe - this will be brutally slow \n")
 
     ##Call Whisper to do the transcribing
     #Load the whisper model - exact model to use is specified in the config.toml file   
     config = toml.loads(open("config.toml").read())
     model_to_use = config["transcribe"]["model_to_use"]
     #Updated to both allow the model to be selected and where you want it to be run
-    model = whisper.load_model(model_to_use, device)
+    model = WhisperModel(model_to_use, device=device, compute_type=compute_type)
     
     ##Transcribe the podcast!!
     
     start_time = time.time()
-    result = model.transcribe(os.path.join(raw_folder, mp3_file), fp16=torch.cuda.is_available())
-    elapsed_time = time.time() - start_time
+    # beam_size=5 matches standard Whisper default accuracy.
+    segments, info = model.transcribe(os.path.join(raw_folder, mp3_file), beam_size=5)
+    
     srt_path = os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt"))
     #AI to the rescue - although think I could have done that myself.. well googled it..
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, segment in enumerate(result["segments"], start=1):
-            start = format_srt_time(segment["start"])
-            end = format_srt_time(segment["end"])
-            text = segment["text"].strip()
+        for i, segment in enumerate(segments, start=1):
+            start = format_srt_time(segment.start)
+            end = format_srt_time(segment.end)
+            text = segment.text.strip()
             
             f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
-        
+            
+    elapsed_time = time.time() - start_time
     print(f"Finished transcribing {mp3_file} in {elapsed_time:.1f} seconds")
     
 

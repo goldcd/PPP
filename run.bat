@@ -7,7 +7,7 @@ if not exist .venv (
     
     echo Activating environment and installing requirements...
     call .venv\Scripts\activate.bat
-    pip install openai-whisper requests tomli
+    pip install faster-whisper requests tomli
 ) else (
     call .venv\Scripts\activate.bat
 )
