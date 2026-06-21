@@ -1,10 +1,23 @@
 import os
 import sys
+import time
 
 if sys.version_info >= (3, 11):
     import tomllib as toml
 else:
     import tomli as toml
+
+##Slopped function to convert time to convert seconts to the format I want to put into my SRT files: HH:MM:SS,mmm
+def format_srt_time(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    milliseconds = int(round((seconds - int(seconds)) * 1000))
+    # Handle rounding overflow (e.g. 1000ms -> 1s)
+    if milliseconds >= 1000:
+        secs += 1
+        milliseconds -= 1000
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"    
 
 
 def transcribe_all():
@@ -62,13 +75,23 @@ def transcribe(mp3_file, raw_folder):
     model_to_use = config["transcribe"]["model_to_use"]
     #Updated to both allow the model to be selected and where you want it to be run
     model = whisper.load_model(model_to_use, device)
-    ##Transcribe the podcast
-    result = model.transcribe(os.path.join(raw_folder, mp3_file))
-    ##Save the transcript
-    with open(os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt")), "w") as f:
-        f.write(result["text"])
-    print(f"Finished transcribing {mp3_file}")
-
+    
+    ##Transcribe the podcast!!
+    
+    start_time = time.time()
+    result = model.transcribe(os.path.join(raw_folder, mp3_file), fp16=torch.cuda.is_available())
+    elapsed_time = time.time() - start_time
+    srt_path = os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt"))
+    #AI to the rescue - although think I could have done that myself.. well googled it..
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for i, segment in enumerate(result["segments"], start=1):
+            start = format_srt_time(segment["start"])
+            end = format_srt_time(segment["end"])
+            text = segment["text"].strip()
+            
+            f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+        
+    print(f"Finished transcribing {mp3_file} in {elapsed_time:.1f} seconds")
     
 
     
