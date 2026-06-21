@@ -1,12 +1,13 @@
 # Perfect Podcast Proxy Configuration
 
 
+
+
+
 [RSS_Import]
 #When adding a new podcast feed, how many days back should we initially consider?
 #This can be manually tweaked in data/feeds.json
 initial_podcast_lookback = 7
-
-
 
 [transcribe]
 # (Faster)Whisper model to use. Options: "tiny", "base", "small", "medium", "large"
@@ -23,3 +24,9 @@ ollama_url = "http://localhost:11434/api/chat"
 #Mode to use for detecting adverts, based on whether it's GPU or not
 gpu_model = "gemma4:12b"
 cpu_model = "gemma4:e2b"
+
+
+[processing]
+# Set to true to force CPU-only processing, even if a GPU is available.
+# I'm just using this for testing. No good reason you should ever change this
+force_cpu = false

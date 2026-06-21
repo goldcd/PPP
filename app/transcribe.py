@@ -77,6 +77,11 @@ def transcribe(mp3_file, raw_folder):
     #Load the whisper model - exact model to use is specified in the config.toml file   
     config = toml.loads(open("config.toml").read())
     model_to_use = config["transcribe"]["model_to_use"]
+    force_cpu = config.get("processing", {}).get("force_cpu", False)
+    if force_cpu and device == "cuda":
+        device = "cpu"
+        compute_type = "int8"
+        print("\n force_cpu=true in config.toml — overriding GPU, using CPU instead \n")
     #Updated to both allow the model to be selected and where you want it to be run
     model = WhisperModel(model_to_use, device=device, compute_type=compute_type)
     

@@ -76,12 +76,16 @@ def start_ollama():
     
     ## Work out which model we need, then try to get it from config, and fallback to defaults.. Seriously, there's got to be a better config mechanism
     ##AI says there is - but I'm not arsed enough yet. To copy and paste blindly is to be human
-    if torch.cuda.is_available():
+    force_cpu = config.get("processing", {}).get("force_cpu", False)
+    if torch.cuda.is_available() and not force_cpu:
         ollama_model = ollama_config.get("gpu_model", "gemma4:12b")
         print(f"\n Using GPU model '{ollama_model}' for advert detection \n")
     else:
         ollama_model = ollama_config.get("cpu_model", "gemma4:e2b")
-        print(f"\n Using CPU model '{ollama_model}' for advert detection \n")
+        if force_cpu:
+            print(f"\n force_cpu=true in config.toml — using CPU model '{ollama_model}' for advert detection \n")
+        else:
+            print(f"\n Using CPU model '{ollama_model}' for advert detection \n")
     
     # Pre-warm/load the model into memory
     print(f"Requesting Ollama to load: {ollama_model}")
@@ -131,14 +135,16 @@ def stop_ollama():
 ## which is another task.. but onwards.
 ## I think it might have been better to retain the content - but this is easier for me to check (i.e. is everything in the output a dull advert?)
 ## better to not remove all the adverts, than start chomping random bits of content out.
+
+##I gave up trying to do this manually. AI can have this function..
 def detect_adverts(srt_file, raw_folder):
     global ollama_url, ollama_model
     
-    
-    ##grab the SRT passed in.. again, I really should just write a file handler.. I'm not paid per line..
     srt_path = os.path.join(raw_folder, srt_file)
     ad_path = srt_path.replace(".srt", ".ad")
     print(f"\nDetecting adverts for {srt_file}...")
+
+    # Get the raw SRT
     try:
         with open(srt_path, "r", encoding="utf-8") as f:
             raw_srt_content = f.read()
@@ -146,84 +152,115 @@ def detect_adverts(srt_file, raw_folder):
         print(f"Error reading SRT file: {e}")
         return
 
-    ## tidy up the SRT
-    ## I'd forgotten this from the course, but windows uses \r\n for new lines, just to annoy developers
+    # Split the raw SRT content into individual blocks
     raw_blocks = raw_srt_content.replace("\r\n", "\n").strip().split("\n\n")
     if not raw_blocks or not raw_blocks[0]:
         print("No blocks found in SRT file.")
         return
 
-    ##This this is a pretty decent start to the prompt. 
-    prompt = (
-    "Analyze the following transcript in SRT format and identify the index ranges of all advertisement blocks and sponsor reads.\n"
-    "Usually, ads appear at the beginning (pre-roll), middle (mid-roll), or end (post-roll) of the transcript.\n"
-    "These ads often have a fixed duration of 30 - 60 seconds and are frequently clumped together back-to-back.\n\n"
-    "Format of response MUST be JSON: {\"ad_ranges\": [[start_index, end_index], ...]}\n"
-    "If no ads are found, return: {\"ad_ranges\": []}\n\n"
-    f"Transcript:\n{raw_srt_content}"
-)
+    # Process in overlapping chunks to handle ads straddling boundaries
+    # chunk_size of 50 with step of 40 creates a 10-block overlap (~60-90s of audio)
+    # Note: 100-block chunks exceed Ollama's default 4096 token context window
+    chunk_size = 50
+    step = 40
+    chunks = [raw_blocks[i:i + chunk_size] for i in range(0, len(raw_blocks), step)]
+    ad_block_indices = set()
 
+    print(f"Processing transcript in {len(chunks)} overlapping chunks...")
 
-    try:
-        print(f"Sending entire transcript to {ollama_model} for analysis (this may take a moment)...")
-        ##and off it goes. Cross your fingers
-        response = requests.post(
-            ollama_url,
-            json={
-                "model": ollama_model,
-                "messages": [
-                    {"role": "system", "content": "You are a precise podcast advertisement detector. Analyze the input transcript and output a JSON object containing only the 'ad_ranges' key. Do not write any conversational text or markdown blocks."},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": False,
-                "format": "json",
-                "options": {
-                    "num_ctx": 65536,       # Expand context window to 32k tokens
-                    "temperature": 0.0      # Make it deterministic
-                }
-            },
-            timeout=120
+    for i, chunk in enumerate(chunks):
+        # Join the blocks in this chunk back together into a string
+        chunk_text = "\n\n".join(chunk)
+
+        # Calculate approximate progress in the episode
+        progress = f"Chunk {i+1} of {len(chunks)}"
+
+        # Get the first and last SRT index in this chunk for grounding the model
+        first_idx = chunk[0].strip().split("\n")[0].strip()
+        last_idx  = chunk[-1].strip().split("\n")[0].strip()
+
+        prompt = (
+            f"You are analyzing a segment of a podcast transcript ({progress}).\n"
+            "Identify any blocks in this segment that are advertisements or sponsor reads.\n"
+            "Adverts are often clustered together, so look for groups of adverts.\n"
+            "Individual adverts and runs of adverts are likely to run over contiguous blocks of the transcript.\n"
+            "Return a JSON object containing a list 'advert_indices' which is an array of SRT indexes (numbers) that are advertisements.\n"
+            f"Only return indices between {first_idx} and {last_idx} — the range present in this segment.\n"
+            "Format of response MUST be JSON: {\"advert_indices\": [1, 2, 3]}\n"
+            "If no ads are found, return: {\"advert_indices\": []}\n\n"
+            f"Transcript Segment:\n{chunk_text}"
         )
 
-        print(f"DEBUG: Response Status = {response.status_code}")
-        print(f"DEBUG: Response Text = {response.text[:500]}...")  # Show first 500 chars
+        try:
+            print(f"  Analyzing chunk {i+1}/{len(chunks)}...")
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": ollama_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a precise podcast ad detector. You output JSON containing only the 'advert_indices' key. Do not include markdown blocks."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "stream": False,
+                    "format": "json",
+                    "options": {
+                        "temperature": 0.0
+                    }
+                },
+                timeout=60
+            )
 
-        ##If it worked then... (yes, AI did do this)
-        if response.status_code == 200:
-            result = response.json()
-            content = result.get("message", {}).get("content", "{}")
-            data = json.loads(content)
-            ad_ranges = data.get("ad_ranges", [])
-            print(f"  -> Detected ad ranges: {ad_ranges}")
-
-            # Filter blocks that fall within any of the returned start/end ranges
-            ad_blocks = []
-            for block in raw_blocks:
-                block = block.strip()
-                if not block:
+            if response.status_code == 200:
+                result = response.json()
+                content = result.get("message", {}).get("content", "{}")
+                # Guard against Ollama occasionally returning empty content
+                if not content.strip():
+                    print(f"    -> Warning: Empty response from Ollama for chunk {i+1}, skipping.")
                     continue
-                lines = block.split("\n")
-                try:
-                    # First line of the block is the SRT index number
-                    idx = int(lines[0].strip())
-                    for start, end in ad_ranges:
-                        if start <= idx <= end:
-                            ad_blocks.append(block)
-                            break
-                except (ValueError, IndexError):
-                    continue
+                data = json.loads(content)
+                indices = data.get("advert_indices", [])
 
-            # Write matching blocks directly to the .ad file
-            if ad_blocks:
-                with open(ad_path, "w", encoding="utf-8") as f:
-                    f.write("\n\n".join(ad_blocks) + "\n\n")
-                print(f"Saved {len(ad_blocks)} advertisement blocks to {ad_path}")
+                # Build the set of SRT indices actually present in this chunk
+                valid_chunk_indices = set()
+                for block in chunk:
+                    lines = block.strip().split("\n")
+                    try:
+                        valid_chunk_indices.add(int(lines[0].strip()))
+                    except (ValueError, IndexError):
+                        continue
+
+                # Discard any indices the model returned that weren't in this chunk
+                validated = [idx for idx in indices if int(idx) in valid_chunk_indices]
+                if len(validated) != len(indices):
+                    print(f"    -> Warning: Discarded {len(indices) - len(validated)} hallucinated index/indices not in this chunk.")
+                print(f"    -> Found ad indices in chunk: {validated}")
+                for idx in validated:
+                    ad_block_indices.add(int(idx))
             else:
-                with open(ad_path, "w", encoding="utf-8") as f:
-                    pass
-                print("No ads detected. Created empty .ad file.")
-        else:
-            print(f"  -> Error calling Ollama (Status {response.status_code}): {response.text}")
+                print(f"    -> Error calling Ollama (Status {response.status_code}): {response.text}")
 
-    except Exception as e:
-        print(f"  -> Exception occurred during Ollama call: {e}")
+        except Exception as e:
+            print(f"    -> Exception occurred during chunk analysis: {e}")
+
+    # Filter and write matching blocks to the .ad file
+    ad_blocks = []
+    for block in raw_blocks:
+        block = block.strip()
+        if not block:
+            continue
+        lines = block.split("\n")
+        try:
+            idx = int(lines[0].strip())
+            if idx in ad_block_indices:
+                ad_blocks.append(block)
+        except (ValueError, IndexError):
+            continue
+
+    if ad_blocks:
+        with open(ad_path, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(ad_blocks) + "\n\n")
+        print(f"Saved {len(ad_blocks)} advertisement blocks to {ad_path}")
+    else:
+        with open(ad_path, "w", encoding="utf-8") as f:
+            pass
+        print("No ads detected. Created empty .ad file.")
