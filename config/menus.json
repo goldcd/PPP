@@ -4,21 +4,32 @@
         "options": [
             {
                 "key": "1",
-                "label": "View RSS Feeds",
-                "action": "call_view_RSS"
+                "label": "Manage Podcast Feeds",
+                "options": [
+                    {
+                        "key": "1",
+                        "label": "View RSS Feeds",
+                        "action": "call_view_RSS"
+                    },
+                    {
+                        "key": "2",
+                        "label": "Add RSS Feed",
+                        "action": "call_add_RSS"
+                    },
+                    {
+                        "key": "3",
+                        "label": "Remove RSS Feed",
+                        "action": "call_delete_RSS"
+                    }
+                ]
             },
             {
                 "key": "2",
-                "label": "Add RSS Feed",
-                "action": "call_add_RSS"
+                "label": "Grab New Podcasts",
+                "action": "call_download"
             },
             {
-                "key": "3",
-                "label": "Remove RSS Feed",
-                "action": "call_delete_RSS"
-            },
-            {
-                "key": "4",
+                "key": "5",
                 "label": "Test Submenus",
                 "options": [
                     {
@@ -39,11 +50,11 @@
                 ]
             },
             {
-                "key": "5",
+                "key": "6",
                 "label": "Dead End"
             },
             {
-                "key": "6",
+                "key": "7",
                 "label": "Exit",
                 "action": "exit_app"
             }

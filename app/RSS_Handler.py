@@ -1,7 +1,16 @@
+import sys
 import os
 import requests
 import json
 import xml.etree.ElementTree as ET
+import datetime
+import shutil
+
+##Seemingly necessary for python 3.10 (where tomllib doesn't exist)
+if sys.version_info >= (3, 11):
+    import tomllib as toml
+else:
+    import tomli as toml
 
 def add_RSS():
     
@@ -50,8 +59,20 @@ def add_RSS():
     while nextID in used_ids:
         nextID += 1
     
-    ##Now we can add it
-    feeds.append({"id":nextID,"title":title,"url":rss_url})
+    ##Create a child folder in the data folder for this podcast, using the ID as the name
+    os.makedirs(f"data/{nextID}", exist_ok=True)
+    
+
+    ##For now just set the current date-stamp as syncfrom, less the lookback from the config file
+    ##I'm not sure TOML is the smooth config file to use - but I asked AI for best practice, and here we are..
+    config = toml.loads(open("config.toml").read())
+    ##Get the lookback from the config file, and then offset this from a current datestamp
+    lookback = config["RSS_Import"]["initial_podcast_lookback"]
+    sync_date = datetime.datetime.now() - datetime.timedelta(days=lookback)
+    syncfrom = sync_date.isoformat()
+
+    ##Now append the entry to our feeds list
+    feeds.append({"id":nextID,"title":title,"url":rss_url, "syncFrom": syncfrom})
     
     ##And finally save it back to file
     save_feed_file(feeds)
@@ -63,6 +84,8 @@ def view_RSS():
     initialize_feed_file()
     feeds = get_feed_file()
 
+    ##get the feeds from the file and order them by ascending ID
+    feeds = sorted(feeds, key=lambda x: x["id"])
     for feed in feeds:
         print(f"{feed['id']}: {feed['title']}")
 
@@ -87,6 +110,10 @@ def delete_RSS():
     feeds = [feed for feed in feeds if feed["id"] != id_to_delete]
     ##Save the file
     save_feed_file(feeds)
+
+    ##Delete the child folder associated with this feed, including all subfolders and files within
+    shutil.rmtree(f"data/{id_to_delete}")
+
     print(f"Deleted feed with ID {id_to_delete}.")
     
 

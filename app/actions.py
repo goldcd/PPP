@@ -2,6 +2,7 @@
 ##Small bits of logic can stay in here, but larger pieces will just call a dedicated module
 
 from app.RSS_Handler import add_RSS, view_RSS, delete_RSS
+from app.download import download
 
 def call_add_RSS():
     add_RSS()
@@ -11,6 +12,9 @@ def call_view_RSS():
 
 def call_delete_RSS():
     delete_RSS()
+
+def call_download():
+    download()
 
 ##First very simple action - just trigger this to close the app
 def exit_app():

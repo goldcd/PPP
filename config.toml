@@ -1,0 +1,9 @@
+# Perfect Podcast Proxy Configuration
+
+
+[RSS_Import]
+#When adding a new podcast feed, how many days back should we initially consider?
+#This can be manually tweaked in data/feeds.json
+initial_podcast_lookback = 7
+
+
