@@ -40,4 +40,10 @@ self_promotion = false
 intro_outro = false
 show_content = false
 other = false
+
+[export]
+# Set to true to activate exporting of cleaned podcasts to a separate directory
+export_activated = false
+# The path where the web folder structure should be built. E.g. "C:/my_web_server/podcasts"
+export_path = ""
 

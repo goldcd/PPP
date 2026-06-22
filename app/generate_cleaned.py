@@ -128,6 +128,12 @@ def generate_all_cleaned():
                                 if os.path.exists(os.path.join(output_folder, mp3_filename)):
                                     # Update the URL to be a relative local path
                                     enclosure.set('url', mp3_filename)
+                                    
+                                    # Prefix the title to avoid confusion
+                                    title_elem = item.find('title')
+                                    if title_elem is not None and title_elem.text:
+                                        if not title_elem.text.startswith("PPP: "):
+                                            title_elem.text = f"PPP: {title_elem.text}"
                                 else:
                                     items_to_remove.append(item)
                             else:
@@ -145,6 +151,20 @@ def generate_all_cleaned():
     ##I'd just like to create a 
 
 
+def get_original_title(mp3_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-show_entries", "format_tags=title",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            mp3_path
+        ]
+        result = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode('utf-8').strip()
+        return result
+    except Exception as e:
+        print(f"Failed to extract title: {e}")
+        return ""
+
 ## Generate the cleaned podcast - using the paired ad file as a guide to remove segments from the original file
 
 def generate_cleaned(podcast_path, output_folder, filename):
@@ -160,6 +180,8 @@ def generate_cleaned(podcast_path, output_folder, filename):
     output_mp3 = os.path.join(output_folder, filename)
     
     os.makedirs(output_folder, exist_ok=True)
+    
+    original_title = get_original_title(input_mp3)
 
     ## Now parse the ad file (it's just an SRT, and we have a helper function in the detect_adverts module)
     with open(input_ad, "r", encoding="utf-8") as f:
@@ -273,10 +295,24 @@ def generate_cleaned(podcast_path, output_folder, filename):
         if temp_files:
             print("Concatenating parts to generate final podcast...")
             concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", concat_file_path,
-                "-c", "copy", output_mp3
+                "ffmpeg", "-y", 
+                "-f", "concat", "-safe", "0", "-i", concat_file_path,
+                "-i", input_mp3,
+                "-map", "0:a",
+                "-map", "1:v?",
+                "-map_metadata", "1",
+                "-id3v2_version", "3",
             ]
+            
+            if original_title:
+                concat_cmd.extend(["-metadata", f"title=PPP: {original_title}"])
+            else:
+                concat_cmd.extend(["-metadata", "title=PPP: Cleaned Podcast"])
+                
+            concat_cmd.extend([
+                "-c", "copy", 
+                output_mp3
+            ])
             try:
                 subprocess.run(concat_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"Successfully generated cleaned podcast: {output_mp3}")

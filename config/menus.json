@@ -46,6 +46,11 @@
                         "key": "4",
                         "label": "Generate cleaned podcasts",
                         "action": "call_generate_cleaned"
+                    },
+                    {
+                        "key": "5",
+                        "label": "Export Podcasts to Web Server",
+                        "action": "call_export"
                     }
                 ]
             },
