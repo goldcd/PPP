@@ -2,12 +2,7 @@ import os
 import subprocess
 import tempfile
 import shutil
-import sys
 
-if sys.version_info >= (3, 11):
-    import tomllib as toml
-else:
-    import tomli as toml
 
 from app.detect_adverts import parse_srt_blocks
 
@@ -37,14 +32,6 @@ def convert_time_to_seconds(time_str):
 def generate_all_cleaned():
     print("Generating cleaned podcasts")
 
-    config = {}
-    if os.path.exists("config.toml"):
-        with open("config.toml", "rb") as f:
-            config = toml.load(f)
-            
-    export_config = config.get("export", {})
-    global_output_path = export_config.get("output_path", "").strip()
-
     ##If the data path doesn't exist, then tell the user they need to add some podcasts
     if not os.path.exists("data"):
         print("No data folder found. Add some podcasts and try again")
@@ -68,10 +55,7 @@ def generate_all_cleaned():
         if os.path.isdir(folder_path):
             raw_folder = os.path.join(folder_path, "raw")
             
-            if global_output_path:
-                output_folder = os.path.join(global_output_path, folder)
-            else:
-                output_folder = os.path.join(folder_path, "output")
+            output_folder = os.path.join(folder_path, "output")
                 
             os.makedirs(output_folder, exist_ok=True)
             
@@ -111,10 +95,7 @@ def generate_all_cleaned():
         folder_path = os.path.join("data", folder)
         if os.path.isdir(folder_path):
             raw_folder = os.path.join(folder_path, "raw")
-            if global_output_path:
-                output_folder = os.path.join(global_output_path, folder)
-            else:
-                output_folder = os.path.join(folder_path, "output")
+            output_folder = os.path.join(folder_path, "output")
                 
             rss_path = os.path.join(raw_folder, "rss.xml")
             output_rss_path = os.path.join(output_folder, "rss.xml")
