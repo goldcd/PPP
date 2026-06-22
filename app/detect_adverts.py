@@ -14,8 +14,7 @@ else:
 
 # Global variables for Ollama (set when try to start it)
 ollama_url = None   
-model_topic = None 
-model_refine = None
+model_to_use = None 
 
 
 def detect_all_adverts():
@@ -50,6 +49,7 @@ def detect_all_adverts():
                             ##Now we've found a file, add it to our list as a tuple
                             srt_process_list.append((srt_file, raw_folder))
                             
+    ## If we found any unprocessed .srt, then we've put them on this list. So now if there's anything on it, we should process each one.abs
     if len(srt_process_list) > 0:
         print(f"\n Found {len(srt_process_list)} unprocessed .srt files \n")
         print("\nStarting Ollama LLM Engine\n")
@@ -57,14 +57,16 @@ def detect_all_adverts():
         for srt_file, raw_folder in srt_process_list:
             detect_adverts(srt_file, raw_folder)
         print("\nStopping Ollama LLM Engine\n")
+        ##Then stop the ollama engine. It's on a timeout, and gets kicked from memory if you load something else - so if we quit out/crash, this will leave eventually by itself.
         stop_ollama()
     else:
         print("No unprocessed .srt files found")
         return
 
 ##Function to determine which ollama model to use and load it up
+##AI did this
 def start_ollama():
-    global ollama_url, model_topic, model_refine
+    global ollama_url, model_to_use
     
     config = {}
     if os.path.exists("config.toml"):
@@ -75,57 +77,52 @@ def start_ollama():
     
     force_cpu = config.get("processing", {}).get("force_cpu", False)
     if torch.cuda.is_available() and not force_cpu:
-        gpu_base = ollama_config.get("gpu_model", "gemma4:12b")
-        model_topic = ollama_config.get("gpu_model_topic", "qwen2.5:14b")
-        model_refine = ollama_config.get("gpu_model_refine", gpu_base)
-        print(f"\n Using GPU model '{model_topic}' for topic mapping and '{model_refine}' for refinement \n")
+        model_to_use = ollama_config.get("gpu_model", "qwen3:14b")
+        print(f"\n Using GPU model '{model_to_use}' for advert detection \n")
     else:
-        cpu_base = ollama_config.get("cpu_model", "gemma4:e2b")
-        model_topic = ollama_config.get("cpu_model_topic", "qwen2.5:7b")
-        model_refine = ollama_config.get("cpu_model_refine", cpu_base)
-        print(f"\n Using CPU model '{model_topic}' for topic mapping and '{model_refine}' for refinement \n")
+        model_to_use = ollama_config.get("cpu_model", "qwen2.5:7b")
+        print(f"\n Using CPU model '{model_to_use}' for advert detection \n")
     
-    # Pre-warm/load the models into memory
-    for m in [model_topic, model_refine]:
-        print(f"Requesting Ollama to load: {m}")
-        try:
-            response = requests.post(
-                ollama_url,
-                json={"model": m, "messages": [], "stream": False},
-                timeout=10
+    # Pre-warm/load the model into memory
+    print(f"Requesting Ollama to load: {model_to_use}")
+    try:
+        response = requests.post(
+            ollama_url,
+            json={"model": model_to_use, "messages": [], "stream": False},
+            timeout=10
+        )
+        if response.status_code == 404:
+            print(f"Model '{model_to_use}' not found locally. Initiating download...")
+            pull_url = ollama_url.replace("/api/chat", "/api/pull")
+            pull_response = requests.post(
+                pull_url,
+                json={"name": model_to_use, "stream": False},
+                timeout=600  # Give it up to 10 minutes depending on speed
             )
-            if response.status_code == 404:
-                print(f"Model '{m}' not found locally. Initiating download...")
-                pull_url = ollama_url.replace("/api/chat", "/api/pull")
-                pull_response = requests.post(
-                    pull_url,
-                    json={"name": m, "stream": False},
-                    timeout=600  # Give it up to 10 minutes depending on speed
-                )
-                if pull_response.status_code == 200:
-                    print(f"Successfully downloaded {m}!")
-                    requests.post(ollama_url, json={"model": m, "messages": [], "stream": False})
-                else:
-                    print(f"Failed to download model: {pull_response.text}")
-        except Exception as e:
-            print(f"Failure to load model '{m}': {e}")
+            if pull_response.status_code == 200:
+                print(f"Successfully downloaded {model_to_use}!")
+                requests.post(ollama_url, json={"model": model_to_use, "messages": [], "stream": False})
+            else:
+                print(f"Failed to download model: {pull_response.text}")
+    except Exception as e:
+        print(f"Failure to load model '{model_to_use}': {e}")
 
 ## Function to tidy up the model when we're done
+##AI did this
 def stop_ollama():
-    global ollama_url, model_topic, model_refine
-    for m in [model_topic, model_refine]:
-        if ollama_url and m:
-            print(f"Unloading {m} from memory...")
-            try:
-                requests.post(
-                    ollama_url,
-                    json={"model": m, "messages": [], "stream": False, "keep_alive": 0},
-                    timeout=5
-                )
-            except Exception as e:
-                print(f"Warning: Could not unload model '{m}': {e}")
+    global ollama_url, model_to_use
+    if ollama_url and model_to_use:
+        print(f"Unloading {model_to_use} from memory...")
+        try:
+            requests.post(
+                ollama_url,
+                json={"model": model_to_use, "messages": [], "stream": False, "keep_alive": 0},
+                timeout=5
+            )
+        except Exception as e:
+            print(f"Warning: Could not unload model '{model_to_use}': {e}")
 
-
+## Function to convert the SRT into a list of dictionaries, for easier handling.
 def parse_srt_blocks(raw_blocks):
     blocks = []
     for rb in raw_blocks:
@@ -135,21 +132,31 @@ def parse_srt_blocks(raw_blocks):
                 idx = int(lines[0].strip())
                 text = " ".join(lines[2:]).strip()
                 blocks.append({
+                    ##The index of the block
                     "idx": idx,
+                    ##The content/transcript of the block
                     "text": text,
+                    ##An unmolested and complete (but trimmed) version of the block as it appeared in the original file
                     "raw": rb.strip()
                 })
             except Exception:
                 pass
     return blocks
 
-
+## Function to take in the list of block dictionaries, and give us our first idea of segments
+##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
 def ask_phase1_topics(url, model, blocks_subset):
+    ##Determine the start and end index of the blocks we're passing in
     valid_indices = {b['idx'] for b in blocks_subset}
+    ##Get the min and max of this set of indices
     min_idx = min(valid_indices)
     max_idx = max(valid_indices)
+    ##Combine the text of the blocks into a single string
     transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
     
+    ##This request to map the segments into topics, is performing way way better than previous "take out the adverts!"
+    ##Also Qwen is a champion. Second time I've come back to her. My eye should never have wandered..
+    ##NOTE TO SELF - I think I should let people choose what topics they want taking out of the podcast. Should also split between self-promotion and podcast-promotion
     sys_msg = (
         "You are a podcast content segmenter and topic mapper.\n"
         "Your task is to analyze this segment of the transcript and partition it chronologically into distinct topics or segments covered in the show.\n"
@@ -157,11 +164,12 @@ def ask_phase1_topics(url, model, blocks_subset):
         "For each topic, identify:\n"
         "1. Short title\n"
         "2. Start block index and end block index (inclusive)\n"
-        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'intro_outro', 'other'.\n\n"
+        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion','intro_outro', 'other'.\n\n"
         "Category Definitions:\n"
         "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
         "- 'sponsor_read': Commercial pitches for external products/services (e.g. NetSuite, Klaviyo, Odoo, Vanta, LinkedIn, etc.).\n"
         "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
+        "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
         "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n"
         "- 'other': Any miscellaneous content that doesn't fit the above.\n\n"
         "You MUST return ONLY a valid JSON object in the following format:\n"
@@ -247,6 +255,9 @@ def ask_phase1_topics(url, model, blocks_subset):
         return None, f"Request Error: {e}"
 
 
+## Function to score the topics returned by the LLM, so we know if they should be yeeted
+## We do this by checking the category, the duration, and looking for naughty keywords
+## Anything scoring 6 or higher gets flagged as an advert
 def score_topic(topic):
     score = 0
     cat = topic["category"].lower()
@@ -256,9 +267,9 @@ def score_topic(topic):
     # 1. Category Weighting
     if "sponsor" in cat or "ad" in cat or "advert" in cat:
         score += 10
-    elif "promotion" in cat or "promo" in cat:
+    elif cat == "podcast_promotion":
         score += 10
-    # Note: intro_outro and show_content get 0 base category score to avoid flagging show outro/credits
+    # Note: intro_outro, show_content, and self_promotion get 0 base category score 
     elif "other" in cat:
         score += 2
         
@@ -282,160 +293,24 @@ def score_topic(topic):
         
     return score
 
-
-def ask_phase3_refine_start(url, model, blocks, start_rough, padding_before=20, padding_after=20, temperature=0.4):
-    total = len(blocks)
-    start_pad_idx = max(1, start_rough - padding_before)
-    end_pad_idx = min(total, start_rough + padding_after)
-    
-    window = [b for b in blocks if start_pad_idx <= b['idx'] <= end_pad_idx]
-    if not window:
-        return None, "Empty window"
-        
-    valid_indices = {b['idx'] for b in window}
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in window)
-    
-    sys_msg = (
-        "You are identifying the exact start boundary of a podcast advertisement.\n"
-        "Your task is to analyze the transcript window and identify the exact block index where the podcast switches from regular show content/conversation to a sponsor read/advertisement.\n"
-        "Look for phrases like 'Support for this show comes from...', 'Thanks to our sponsor...', or the first sentence pitching a sponsor's product.\n"
-        f"The advertisement roughly starts around index {start_rough}.\n"
-        "Keep your internal thinking/reasoning extremely brief and concise (maximum 2 sentences).\n"
-        "You MUST return ONLY a valid JSON object in the following format:\n"
-        '{"start_idx": 123}'
-    )
-    
-    user_msg = f"Transcript Window (Candidate Start: {start_rough}):\n{transcript_text}\n\nIdentify exact start block index in JSON."
-    
-    try:
-        r = requests.post(
-            url,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_ctx": 4096
-                },
-                "format": "json"
-            },
-            timeout=90,
-        )
-        if r.status_code == 200:
-            raw = r.json().get("message", {}).get("content", "").strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-                
-            data = json.loads(raw)
-            s_idx = data.get("start_idx") or data.get("start_rx") or data.get("start_index")
-            if s_idx is None:
-                return None, "Missing start_idx in response JSON"
-            s_idx = int(s_idx)
-            if s_idx not in valid_indices:
-                return None, f"Returned index {s_idx} is outside the valid window"
-            return s_idx, None
-        else:
-            return None, f"API Error: Status {r.status_code} - {r.text}"
-    except Exception as e:
-        return None, f"Request Error: {e}"
-
-
-def ask_phase3_refine_end(url, model, blocks, end_rough, padding_before=20, padding_after=20, temperature=0.4):
-    total = len(blocks)
-    start_pad_idx = max(1, end_rough - padding_before)
-    end_pad_idx = min(total, end_rough + padding_after)
-    
-    window = [b for b in blocks if start_pad_idx <= b['idx'] <= end_pad_idx]
-    if not window:
-        return None, "Empty window"
-        
-    valid_indices = {b['idx'] for b in window}
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in window)
-    
-    sys_msg = (
-        "You are identifying the exact end boundary of a podcast advertisement.\n"
-        "Your task is to analyze the transcript window and identify the exact block index where the podcast switches from a sponsor read/advertisement back to regular show content/conversation.\n"
-        "Look for phrases like 'Scott, we're back', 'We'll be right back', or call-to-action endpoints like 'go to website.com and use code...'.\n"
-        f"The advertisement roughly ends around index {end_rough}.\n"
-        "Keep your internal thinking/reasoning extremely brief and concise (maximum 2 sentences).\n"
-        "You MUST return ONLY a valid JSON object in the following format:\n"
-        '{"end_idx": 123}'
-    )
-    
-    user_msg = f"Transcript Window (Candidate End: {end_rough}):\n{transcript_text}\n\nIdentify exact end block index in JSON."
-    
-    try:
-        r = requests.post(
-            url,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "stream": False,
-                "options": {
-                    "temperature": temperature,
-                    "num_ctx": 4096
-                },
-                "format": "json"
-            },
-            timeout=90,
-        )
-        if r.status_code == 200:
-            raw = r.json().get("message", {}).get("content", "").strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-                
-            data = json.loads(raw)
-            e_idx = data.get("end_idx") or data.get("end_rx") or data.get("end_index")
-            if e_idx is None:
-                return None, "Missing end_idx in response JSON"
-            e_idx = int(e_idx)
-            if e_idx not in valid_indices:
-                return None, f"Returned index {e_idx} is outside the valid window"
-            return e_idx, None
-        else:
-            return None, f"API Error: Status {r.status_code} - {r.text}"
-    except Exception as e:
-        return None, f"Request Error: {e}"
-
-
-def get_flagged_ranges(flagged_indices, gap_threshold=20):
-    if not flagged_indices:
-        return []
-    sorted_indices = sorted(list(flagged_indices))
-    ranges = []
-    start = sorted_indices[0]
-    prev = start
-    for idx in sorted_indices[1:]:
-        if idx - prev <= gap_threshold + 1:
-            prev = idx
-        else:
-            ranges.append((start, prev))
-            start = idx
-            prev = idx
-    ranges.append((start, prev))
-    return ranges
-
-
-def get_median(lst):
-    if not lst:
-        return None
-    sorted_lst = sorted(lst)
-    return sorted_lst[len(sorted_lst) // 2]
-
-
+## Top level function to call, to detect adverts (and now other stuff), in a single SRT file
+## This is the new single-pass champion that chunks the SRT and passes it to Qwen to do all the heavy lifting
 def detect_adverts(srt_file, raw_folder):
-    global ollama_url, model_topic, model_refine
+    global ollama_url, model_to_use
+    
+    # Load config to determine what content to remove
+    config = {}
+    if os.path.exists("config.toml"):
+        with open("config.toml", "rb") as f:
+            config = toml.load(f)
+    content_to_remove = config.get("content_to_remove", {
+        "sponsor_read": True,
+        "podcast_promotion": True,
+        "self_promotion": False,
+        "intro_outro": False,
+        "show_content": False,
+        "other": False
+    })
     
     srt_path = os.path.join(raw_folder, srt_file)
     ad_path = srt_path.replace(".srt", ".ad")
@@ -464,8 +339,8 @@ def detect_adverts(srt_file, raw_folder):
     chunk_size = 120
     overlap = 15
 
-    # --- PASS 1: CHUNKED TOPIC MAPPING ---
-    print("\n--- PASS 1: Chunked Topic Mapping & Classification ---")
+    # --- TOPIC MAPPING ---
+    print("\n--- Topic Mapping & Classification ---")
     all_topics = []
     
     pos = 0
@@ -480,7 +355,7 @@ def detect_adverts(srt_file, raw_folder):
         max_retries = 3
         found = None
         for attempt in range(max_retries):
-            res, err = ask_phase1_topics(ollama_url, model_topic, chunk)
+            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk)
             if res is not None:
                 found = res
                 break
@@ -498,7 +373,7 @@ def detect_adverts(srt_file, raw_folder):
             break
         pos += (chunk_size - overlap)
         
-    print(f"Pass 1 complete. Total raw topics mapped: {len(all_topics)}")
+    print(f"Topic mapping complete. Total raw topics mapped: {len(all_topics)}")
     
     # --- PRINT TOPIC MAP TABLE & APPLY WEIGHTING ---
     print("\n--- GENERATED TOPIC MAP & WEIGHTING ---")
@@ -510,10 +385,21 @@ def detect_adverts(srt_file, raw_folder):
     for t in all_topics:
         duration = t["end_idx"] - t["start_idx"] + 1
         score = score_topic(t)
-        flagged_str = "[FLAGGED]" if score >= 6 else "       "
+        
+        cat = t['category'].lower()
+        
+        # Check if the LLM's chosen category is toggled ON for removal in the config
+        is_flagged = content_to_remove.get(cat, False)
+        
+        # Safety net: If the heuristic score is high (indicating a sneaky ad block)
+        # AND the user wants sponsor reads removed, flag it anyway.
+        if score >= 6 and content_to_remove.get("sponsor_read", True):
+            is_flagged = True
+
+        flagged_str = "[FLAGGED]" if is_flagged else "       "
         print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {score:<5} | {t['title']} {flagged_str}")
         
-        if score >= 6:
+        if is_flagged:
             for idx in range(t["start_idx"], t["end_idx"] + 1):
                 flagged_indices.add(idx)
                 
@@ -526,82 +412,14 @@ def detect_adverts(srt_file, raw_folder):
         print("Created empty .ad file.")
         return
         
-    # --- RECONCILIATION & COLLISION MERGING ---
-    rough_segments = get_flagged_ranges(flagged_indices, gap_threshold=20)
-    print(f"\nRough ad segments identified (merged): {rough_segments}")
-    
-    # --- PASS 2: TARGETED BOUNDARY REFINEMENT ---
-    print("\n--- PASS 2: Targeted Boundary Refinement (Voting Consensus) ---")
-    final_ad_indices = set()
-    NUM_RUNS = 3
-    TEMP = 0.4
-    
-    for start_rough, end_rough in rough_segments:
-        print(f"Refining boundaries for segment roughly {start_rough} to {end_rough}...")
-        
-        # 1. Refine Start Boundary
-        if start_rough <= 5 and 1 in flagged_indices:
-            print(f"  Refining start boundary (around {start_rough})... [Safeguard] Snapped to 1 because ad starts at the beginning of the show.")
-            final_start = 1
-        else:
-            print(f"  Refining start boundary (around {start_rough})...", end=" ", flush=True)
-            start_votes = []
-            for run in range(NUM_RUNS):
-                res, err = ask_phase3_refine_start(ollama_url, model_refine, blocks, start_rough, temperature=TEMP)
-                if res is not None:
-                    start_votes.append(res)
-                else:
-                    print(f"[Run {run+1} failed: {err}]", end=" ", flush=True)
-                    
-            final_start = get_median(start_votes)
-            if final_start is None:
-                print(f"Failed all runs. Falling back to {start_rough}.")
-                final_start = start_rough
-            else:
-                print(f"Consensus start index: {final_start} (Votes: {start_votes})")
-            
-        # 2. Refine End Boundary
-        if end_rough >= total - 5 and total in flagged_indices:
-            print(f"  Refining end boundary (around {end_rough})... [Safeguard] Snapped to {total} because ad runs to the end of the show.")
-            final_end = total
-        else:
-            print(f"  Refining end boundary (around {end_rough})...", end=" ", flush=True)
-            end_votes = []
-            for run in range(NUM_RUNS):
-                res, err = ask_phase3_refine_end(ollama_url, model_refine, blocks, end_rough, temperature=TEMP)
-                if res is not None:
-                    end_votes.append(res)
-                else:
-                    print(f"[Run {run+1} failed: {err}]", end=" ", flush=True)
-                    
-            final_end = get_median(end_votes)
-            if final_end is None:
-                print(f"Failed all runs. Falling back to {end_rough}.")
-                final_end = end_rough
-            else:
-                print(f"Consensus end index: {final_end} (Votes: {end_votes})")
-            
-        # Safe-guard for snap-to-edge constraint for index 1
-        # If the start is 2, do NOT snap to 1 unless block 1 is flagged in topic map.
-        if final_start == 2:
-            if 1 not in flagged_indices:
-                print("  [Safeguard] Leaving start at 2 to preserve content.")
-            else:
-                print("  [Safeguard] Snapping start to 1 because block 1 was flagged in topic map.")
-                final_start = 1
-                
-        print(f"  => Confirmed refined range: {final_start} to {final_end}")
-        for idx in range(final_start, final_end + 1):
-            final_ad_indices.add(idx)
-
-    # Gap filling: If there is a small gap (<= 6 blocks) between two ad blocks, merge them.
-    sorted_ads = sorted(list(final_ad_indices))
+    # Gap filling: If there is a small gap (<= 7 blocks) between two ad blocks, merge them.
+    sorted_ads = sorted(list(flagged_indices))
     final_ads = set()
     if sorted_ads:
         current = sorted_ads[0]
         final_ads.add(current)
         for idx in sorted_ads[1:]:
-            if idx - current <= 7:
+            if idx - current <= 8:  # Allow bridging a small gap of ~7 unflagged blocks
                 for fill in range(current + 1, idx):
                     final_ads.add(fill)
             final_ads.add(idx)

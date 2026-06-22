@@ -44,11 +44,13 @@ def download():
                 print(f"{feed['title']}: {item.find('title').text}")
                 ##Take the guid from the rss entry (unique ID)
                 guid = item.find("guid").text
+                import re
+                safe_guid = re.sub(r'[\\/*?:"<>|]', '_', guid)
                 ##Get the media url
                 media_url = item.find("enclosure").get("url")
                 ##Download the file, and save it with the guid as the filename
                 download_response = requests.get(media_url)
-                with open(os.path.join(raw_folder, f"{guid}.mp3"), "wb") as f:
+                with open(os.path.join(raw_folder, f"{safe_guid}.mp3"), "wb") as f:
                     f.write(download_response.content)
 
         ##New we've grabbed any new podcasts, we should update the syncfrom date to be the current date
