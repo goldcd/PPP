@@ -40,3 +40,8 @@ self_promotion = false
 intro_outro = false
 show_content = false
 other = false
+
+[export]
+# Path to output the cleaned MP3s and the updated RSS feed.
+# If left blank or missing, it will default to the "output" folder alongside each podcast's "raw" folder.
+output_path = ""

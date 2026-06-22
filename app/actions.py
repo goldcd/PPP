@@ -7,6 +7,7 @@ from app.RSS_Handler import add_RSS, view_RSS, delete_RSS
 from app.download import download
 from app.transcribe import transcribe_all
 from app.detect_adverts import detect_all_adverts
+from app.generate_cleaned import generate_all_cleaned
 
 def call_add_RSS():
     add_RSS()
@@ -26,11 +27,15 @@ def call_transcribe():
 def call_detect_adverts():
     detect_all_adverts()
 
+def call_generate_cleaned():
+    generate_all_cleaned()
+
 ## Get new podcasts and do all the processing - option I presume will be used most of the time
 def call_process_all():
     download()
     transcribe_all()
     detect_all_adverts()
+    generate_all_cleaned()
 
 
 ##First very simple action - just trigger this to close the app

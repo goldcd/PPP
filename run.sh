@@ -6,7 +6,7 @@ if [ ! -d ".venv" ]; then
     
     echo "Activating environment and installing requirements..."
     source .venv/bin/activate
-    pip install faster-whisper requests tomli
+    pip install torch faster-whisper requests tomli
 else
     source .venv/bin/activate
 fi

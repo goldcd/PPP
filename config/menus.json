@@ -41,6 +41,11 @@
                         "key": "3",
                         "label": "Detect Adverts",
                         "action": "call_detect_adverts"
+                    },
+                    {
+                        "key": "4",
+                        "label": "Generate cleaned podcasts",
+                        "action": "call_generate_cleaned"
                     }
                 ]
             },

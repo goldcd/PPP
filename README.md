@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Goal of this app is to provide a proxy for your podcasts, which will modify the raw feed in useful ways - initially advert removal
+Goal of this app is to provide a proxy for your podcasts, which will modify the raw feed in useful ways - initially advert removal.
+
+App should be entirely self-contained, allowing podcasts to be processed and served from your local machine, without external interaction.
 
 ## Scope
 
@@ -44,6 +46,7 @@ The current scope is to:
 
 - Current versions isn't designed to operate from the CLI. I'll add this later, so this can more easily be run in the background/automated.
 - Assumes Ollama is installed locally on default port
+- I'd like to find a way to dump the output somewhere web-accessible (i.e. so I don't have to have the app running, to transfer to my phone)
 
 ## Scratchpad
 
