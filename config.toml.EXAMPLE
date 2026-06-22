@@ -27,6 +27,9 @@ cpu_model = "qwen2.5:7b"
 # I'm just using this for testing. No good reason you should ever change this
 force_cpu = false
 
+# Set to true to insert a subtle 'pop' sound where an advert/segment was deleted
+insert_edit_pop = true
+
 [content_to_remove]
 # Select which categories of content you wish to extract and remove from the podcast
 sponsor_read = true

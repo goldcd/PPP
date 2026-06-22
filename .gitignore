@@ -8,3 +8,4 @@ __pycache__/
 archive/
 app/*.md
 config.toml
+test_sounds/

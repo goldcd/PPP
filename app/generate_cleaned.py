@@ -2,7 +2,7 @@ import os
 import subprocess
 import tempfile
 import shutil
-
+import toml
 
 from app.detect_adverts import parse_srt_blocks
 
@@ -272,7 +272,6 @@ def generate_cleaned(podcast_path, output_folder, filename):
     print(f"Segments to cut: {cut_segments}")
 
     ##Now let's get out the scissors... i.e. cut the mp3 up into segments, skipping out the ad segments.
-    ## Single comment means I gave up and let Gemini do it.. I'm sure I could have if I'd wanted to... maybe
     if not cut_segments:
         print("No ads to remove. Copying original file to output.")
         shutil.copy2(input_mp3, output_mp3)
@@ -289,46 +288,91 @@ def generate_cleaned(podcast_path, output_folder, filename):
     # Sort just in case they aren't sequential
     cut_seconds.sort(key=lambda x: x[0])
 
-    # Build the list of segments to keep
-    keep_segments = []
+    # Check config for pop insertion
+    insert_pop = True
+    if os.path.exists("config.toml"):
+        try:
+            with open("config.toml", "r", encoding="utf-8") as f:
+                config_data = toml.load(f)
+                insert_pop = config_data.get("processing", {}).get("insert_edit_pop", True)
+        except Exception as e:
+            print(f"Failed to read config.toml: {e}")
+
+    # Build the playlist of kept segments and pops
+    playlist = []
     current_time = 0.0
 
     for start_sec, end_sec in cut_seconds:
         if start_sec > current_time:
-            keep_segments.append((current_time, start_sec))
+            # Add kept segment
+            playlist.append(('keep', current_time, start_sec))
+            # Since we are about to cut an ad, insert a pop (if enabled)
+            if insert_pop:
+                playlist.append(('pop', None, None))
+        else:
+            # Overlapping cut. If it's the very first cut at 0.0, we still want a pop.
+            if len(playlist) == 0 and insert_pop:
+                playlist.append(('pop', None, None))
+                
         current_time = max(current_time, end_sec)
 
     # We also need the segment from the last cut to the end of the file.
-    # We can represent the end of file as None
-    keep_segments.append((current_time, None))
+    playlist.append(('keep', current_time, None))
 
-    print(f"Keeping segments (seconds): {keep_segments}")
+    print(f"Constructed playlist: {playlist}")
 
     # Now use ffmpeg to extract these segments and concatenate them
     with tempfile.TemporaryDirectory() as temp_dir:
         concat_file_path = os.path.join(temp_dir, "concat.txt")
         temp_files = []
+        pop_file_path = None
+
+        if insert_pop and any(item[0] == 'pop' for item in playlist):
+            # Probe input for exact sample rate and channels
+            sample_rate = "44100"
+            channels = "2"
+            try:
+                probe_cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate,channels", "-of", "csv=p=0", input_mp3]
+                probe_res = subprocess.check_output(probe_cmd, stderr=subprocess.DEVNULL).decode('utf-8').strip()
+                if "," in probe_res:
+                    sr_parsed, ch_parsed = probe_res.split(",")
+                    if sr_parsed.isdigit(): sample_rate = sr_parsed
+                    if ch_parsed.isdigit(): channels = ch_parsed
+            except Exception as e:
+                print(f"Failed to probe input_mp3: {e}")
+
+            pop_file_path = os.path.join(temp_dir, "pop.mp3")
+            pop_cmd = [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "aevalsrc=exprs=sin(400*2*PI*t)*exp(-30*t):d=0.15",
+                "-c:a", "libmp3lame", "-ar", sample_rate, "-ac", channels, pop_file_path
+            ]
+            try:
+                subprocess.run(pop_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"Failed to generate pop sound: {e}")
+                pop_file_path = None
 
         with open(concat_file_path, "w", encoding="utf-8") as f:
-            for i, (start_sec, end_sec) in enumerate(keep_segments):
-                temp_mp3 = os.path.join(temp_dir, f"part_{i}.mp3")
+            for i, (p_type, start_sec, end_sec) in enumerate(playlist):
+                if p_type == 'keep':
+                    temp_mp3 = os.path.join(temp_dir, f"part_{i}.mp3")
+                    cmd = ["ffmpeg", "-y", "-i", input_mp3, "-ss", str(start_sec)]
+                    if end_sec is not None:
+                        cmd.extend(["-to", str(end_sec)])
+                    # Fast copy without re-encoding
+                    cmd.extend(["-c", "copy", temp_mp3])
 
-                cmd = ["ffmpeg", "-y", "-i", input_mp3, "-ss", str(start_sec)]
-                if end_sec is not None:
-                    cmd.extend(["-to", str(end_sec)])
-                # Fast copy without re-encoding
-                cmd.extend(["-c", "copy", temp_mp3])
-
-                print(f"Extracting part {i}: {start_sec} to {end_sec if end_sec else 'EOF'}...")
-                try:
-                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    temp_files.append(temp_mp3)
-                    # ffmpeg concat demuxer requires paths to be properly escaped or relative.
-                    # Using forward slashes for Windows compatibility in ffmpeg
-                    escaped_path = temp_mp3.replace('\\', '/')
-                    f.write(f"file '{escaped_path}'\n")
-                except subprocess.CalledProcessError as e:
-                    print(f"Error extracting part {i}: {e}")
+                    print(f"Extracting part {i}: {start_sec} to {end_sec if end_sec else 'EOF'}...")
+                    try:
+                        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        temp_files.append(temp_mp3)
+                        escaped_path = temp_mp3.replace('\\', '/')
+                        f.write(f"file '{escaped_path}'\n")
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error extracting part {i}: {e}")
+                elif p_type == 'pop' and pop_file_path:
+                    escaped_pop = pop_file_path.replace('\\', '/')
+                    f.write(f"file '{escaped_pop}'\n")
 
         # Now concatenate the extracted parts
         if temp_files:
