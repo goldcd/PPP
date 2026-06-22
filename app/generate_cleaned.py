@@ -2,7 +2,10 @@ import os
 import subprocess
 import tempfile
 import shutil
-import toml
+try:
+    import tomllib as toml
+except ModuleNotFoundError:
+    import tomli as toml
 
 from app.detect_adverts import parse_srt_blocks
 
@@ -292,7 +295,7 @@ def generate_cleaned(podcast_path, output_folder, filename):
     insert_pop = True
     if os.path.exists("config.toml"):
         try:
-            with open("config.toml", "r", encoding="utf-8") as f:
+            with open("config.toml", "rb") as f:
                 config_data = toml.load(f)
                 insert_pop = config_data.get("processing", {}).get("insert_edit_pop", True)
         except Exception as e:

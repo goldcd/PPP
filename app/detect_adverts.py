@@ -392,9 +392,11 @@ def detect_adverts(srt_file, raw_folder):
         is_flagged = content_to_remove.get(cat, False)
         
         # Safety net: If the heuristic score is high (indicating a sneaky ad block)
-        # AND the user wants sponsor reads removed, flag it anyway.
-        if score >= 6 and content_to_remove.get("sponsor_read", True):
-            is_flagged = True
+        # AND the user wants sponsor reads removed, flag it anyway,
+        # but ONLY if it wasn't explicitly categorised as a type the user wants to keep.
+        if not is_flagged and score >= 6 and content_to_remove.get("sponsor_read", True):
+            if cat in ["show_content", "other"]:
+                is_flagged = True
 
         flagged_str = "[FLAGGED]" if is_flagged else "       "
         print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {score:<5} | {t['title']} {flagged_str}")

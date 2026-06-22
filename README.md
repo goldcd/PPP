@@ -38,6 +38,15 @@ The current scope is to:
     - Downloads podcast mp3s (unless older than lookback or already downloaded)
   - Transcribe 
     - Generates ,srt transcription in data\<podcast id> for all podcasts without one
+  - Detect Adverts
+    - Scans transcription for adverts and generates SRT of their placement
+    - Types of content you want to remove/retain can be specified in config
+  - Generate Clean
+    - Generates a new mp3 file with the adverts removed
+    - Configurable Pop can be inserted where content was removed
+  - Export Podcast
+    - Copies processed files to a web-accessible directory
+    - Generates a cleaned RSS feed that can be subscribed to, via landing page (or by copying the RSS link, if that doesn't work)
 - "Trigger All Podcast Processing"
   - Executes all of the "Manage Podcast Processing" options in order
   
@@ -47,16 +56,7 @@ The current scope is to:
 - Current versions isn't designed to operate from the CLI. I'll add this later, so this can more easily be run in the background/automated.
 - Assumes Ollama is installed locally on default port
 - I'd like to find a way to dump the output somewhere web-accessible (i.e. so I don't have to have the app running, to transfer to my phone)
+- Only really been tested against my personal needs/PC
 
-## Scratchpad
-
-I'll use Pivot as my test podcast. Mainly as there's no way to get a version of it without adverts - so I'm guilt free
-
-At some point need to come up with a longer list, for testing
-https://feeds.megaphone.fm/pivot
-
-https://feeds.megaphone.fm/kermodeandmayo
-
-https://audioboom.com/channels/2399216.rss
 
 - 
