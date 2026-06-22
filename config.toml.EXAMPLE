@@ -1,9 +1,5 @@
 # Perfect Podcast Proxy Configuration
 
-
-
-
-
 [RSS_Import]
 #When adding a new podcast feed, how many days back should we initially consider?
 #This can be manually altered later in data/feeds.json, if you didn't notice this setting before
@@ -26,7 +22,6 @@ gpu_model = "qwen3:14b"
 cpu_model = "qwen2.5:7b"
 
 
-
 [processing]
 # Set to true to force CPU-only processing, even if a GPU is available.
 # I'm just using this for testing. No good reason you should ever change this
@@ -43,9 +38,8 @@ other = false
 
 [export]
 # Set to true to activate exporting of cleaned podcasts to a separate directory
-export_activated = true
+export_activated = false
 # The path where the web folder structure should be built. E.g. "C:/my_web_server/podcasts"
 export_path = "W:/ppp"
 # The base URL where this folder will be hosted. E.g. "http://192.168.1.100/ppp"
-base_url = "https://bobpitch.com/ppp"
-
+base_url = "http://YOUR_SERVER_IP/ppp"

@@ -49,7 +49,7 @@
                     },
                     {
                         "key": "5",
-                        "label": "Export Podcasts to Web Server",
+                        "label": "Export Podcasts to config specified file path",
                         "action": "call_export"
                     }
                 ]

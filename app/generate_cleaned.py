@@ -111,6 +111,40 @@ def generate_all_cleaned():
                     channel = root.find('channel')
                     
                     if channel is not None:
+                        # Remove atom:link rel="self" to prevent podcast apps from redirecting to the original feed
+                        atom_namespace = "http://www.w3.org/2005/Atom"
+                        for link in channel.findall(f'{{{atom_namespace}}}link'):
+                            if link.get('rel') == 'self':
+                                channel.remove(link)
+                                
+                        # Prefix the channel title
+                        channel_title = channel.find('title')
+                        if channel_title is not None and channel_title.text:
+                            if not channel_title.text.startswith("PPP: "):
+                                channel_title.text = f"PPP: {channel_title.text}"
+                                
+                        # Change channel link to avoid matching original feed
+                        channel_link = channel.find('link')
+                        if channel_link is not None:
+                            channel_link.text = "http://localhost/ppp"
+                            
+                        # Scrub author
+                        itunes_namespace = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+                        author_elem = channel.find(f'{{{itunes_namespace}}}author')
+                        if author_elem is not None and author_elem.text:
+                            author_elem.text = f"PPP: {author_elem.text}"
+                            
+                        # Scrub image metadata
+                        image_elem = channel.find('image')
+                        if image_elem is not None:
+                            img_link = image_elem.find('link')
+                            if img_link is not None:
+                                img_link.text = "http://localhost/ppp"
+                            img_title = image_elem.find('title')
+                            if img_title is not None and img_title.text:
+                                if not img_title.text.startswith("PPP: "):
+                                    img_title.text = f"PPP: {img_title.text}"
+                                
                         items_to_remove = []
                         for item in channel.findall('item'):
                             enclosure = item.find('enclosure')
@@ -134,6 +168,11 @@ def generate_all_cleaned():
                                     if title_elem is not None and title_elem.text:
                                         if not title_elem.text.startswith("PPP: "):
                                             title_elem.text = f"PPP: {title_elem.text}"
+                                            
+                                    # Alter the GUID so podcast apps treat it as a new distinct episode
+                                    if guid_elem is not None and guid_elem.text:
+                                        if not guid_elem.text.endswith("_ppp"):
+                                            guid_elem.text = f"{guid_elem.text}_ppp"
                                 else:
                                     items_to_remove.append(item)
                             else:

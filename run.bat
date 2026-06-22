@@ -12,5 +12,11 @@ if not exist .venv (
     call .venv\Scripts\activate.bat
 )
 
+:: Check if config.toml exists, create from example if it doesn't
+if not exist config.toml (
+    echo Creating config.toml from example...
+    copy config.toml.EXAMPLE config.toml
+)
+
 :: Now we can start
 python main.py

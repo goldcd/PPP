@@ -10,4 +10,9 @@ if [ ! -d ".venv" ]; then
 else
     source .venv/bin/activate
 fi
+if [ ! -f "config.toml" ]; then
+    echo "Creating config.toml from example..."
+    cp config.toml.EXAMPLE config.toml
+fi
+
 python3 main.py
