@@ -283,7 +283,7 @@ def score_topic(topic):
     return score
 
 
-def ask_phase3_refine_start(url, model, blocks, start_rough, padding_before=20, padding_after=10, temperature=0.4):
+def ask_phase3_refine_start(url, model, blocks, start_rough, padding_before=20, padding_after=20, temperature=0.4):
     total = len(blocks)
     start_pad_idx = max(1, start_rough - padding_before)
     end_pad_idx = min(total, start_rough + padding_after)
@@ -346,7 +346,7 @@ def ask_phase3_refine_start(url, model, blocks, start_rough, padding_before=20, 
         return None, f"Request Error: {e}"
 
 
-def ask_phase3_refine_end(url, model, blocks, end_rough, padding_before=10, padding_after=20, temperature=0.4):
+def ask_phase3_refine_end(url, model, blocks, end_rough, padding_before=20, padding_after=20, temperature=0.4):
     total = len(blocks)
     start_pad_idx = max(1, end_rough - padding_before)
     end_pad_idx = min(total, end_rough + padding_after)
