@@ -4,6 +4,7 @@ import time
 import torch
 import requests
 import json
+from collections import Counter
 
 if sys.version_info >= (3, 11):
     import tomllib as toml
@@ -163,74 +164,96 @@ def detect_adverts(srt_file, raw_folder):
     # Note: 100-block chunks exceed Ollama's default 4096 token context window
     chunk_size = 50
     step = 40
-    chunks = [raw_blocks[i:i + chunk_size] for i in range(0, len(raw_blocks), step)]
-    ad_block_indices = set()
+    ad_block_votes = Counter()    # How many chunks flagged this block as an ad
+    block_coverage = Counter()    # How many chunks even saw this block
+    total_blocks = len(raw_blocks)
 
-    print(f"Processing transcript in {len(chunks)} overlapping chunks...")
+    print(f"Processing transcript of {total_blocks} blocks with dynamic overlapping chunks...")
 
-    for i, chunk in enumerate(chunks):
-        # Join the blocks in this chunk back together into a string
+    current_start_idx = 0
+    chunk_count = 0
+    jitter_applied = False
+
+    while current_start_idx < total_blocks:
+        chunk = raw_blocks[current_start_idx : current_start_idx + chunk_size]
+        if not chunk:
+            break
+            
+        chunk_count += 1
         chunk_text = "\n\n".join(chunk)
 
         # Calculate approximate progress in the episode
-        progress = f"Chunk {i+1} of {len(chunks)}"
+        progress = f"Chunk {chunk_count} (~{min(100, int((current_start_idx/total_blocks)*100))}% through episode)"
 
         # Get the first and last SRT index in this chunk for grounding the model
         first_idx = chunk[0].strip().split("\n")[0].strip()
         last_idx  = chunk[-1].strip().split("\n")[0].strip()
 
-        
-        # The more complex my prompt was getting, the seemingly worse my results...
-        prompt = (
-            f"You are analyzing a segment of a podcast transcript ({progress})\n\n"
-            "GOAL:Identify the SRT index ranges of all advertisement blocks and sponsor reads.\n\n"
-            "Some segments may be entirely adverts, or contiguous groups of adverts. Don't worry about how much of a segment you're identifying as adverts."
-            "Obviously advert segments are more likely to be next to other advert segments. So weight based upon adjancencies.\n"
-            "Segments are being provided sequentially with an overlap of 10 - so if you're unsure about the very edges, it will be picked up by the next segment.\n"
-            "A block of adverts is likely to span over 30 seconds, but be under several minutes."
-            "Respond ONLY with a valid JSON object. Do not include markdown formatting or explanations.\n"
-            "If an advert runs from block 10 to 15, return it as a range: [10, 15]. For a single block, return [20, 20].\n"
-            "{\"advert_ranges\": [[10, 15], [20, 20]]}\n"
-            "If no ads are found, return: {\"advert_ranges\": []}\n\n"
-            f"Transcript Segment:\n{chunk_text}"
-        )
 
-        
-        """
+        # Build overlap context from previously detected ad blocks to give the model
+        # awareness of what's been found in adjacent/overlapping regions
+        overlap_context = ""
+        if ad_block_votes:
+            try:
+                first_int = int(first_idx)
+                last_int = int(last_idx)
+                # Blocks in the overlap region of this chunk that were already flagged
+                already_flagged = sorted([idx for idx in ad_block_votes if first_int <= idx <= last_int])
+                if already_flagged:
+                    overlap_context = (
+                        f"Context from previous analysis: blocks {already_flagged[0]}-{already_flagged[-1]} "
+                        f"in this segment were already identified as advertisements. "
+                        "Blocks adjacent to this range are likely also part of the same ad break.\n\n"
+                    )
+                else:
+                    # How recently did the last ad end before this chunk?
+                    preceding_ads = [idx for idx in ad_block_votes if idx < first_int]
+                    if preceding_ads:
+                        last_ad = max(preceding_ads)
+                        gap = first_int - last_ad
+                        if gap <= 15:
+                            overlap_context = (
+                                f"Context: Advertisements were detected ending at block {last_ad}, "
+                                f"only {gap} blocks before this segment starts. "
+                                "This segment may be continuing that ad break.\n\n"
+                            )
+                        else:
+                            overlap_context = (
+                                f"Context: The last advertisement was at block {last_ad} "
+                                f"({gap} blocks before this segment). "
+                                "Any ads here would be a fresh, independent ad break.\n\n"
+                            )
+            except (ValueError, TypeError):
+                pass
 
         prompt = (
-            f"You are analyzing a segment of a podcast transcript ({progress}).\n"
-            "Identify any blocks in this segment that are advertisements or sponsor reads.\n"
-            "Adverts are often clustered together, so look for groups of adverts.\n"
-            "Individual adverts and runs of adverts are likely to run over contiguous blocks of the transcript.\n"
-            "Return a JSON object containing a list 'advert_indices' which is an array of SRT indexes (numbers) that are advertisements.\n"
-            f"Only return indices between {first_idx} and {last_idx} — the range present in this segment.\n"
-            "Format of response MUST be JSON: {\"advert_indices\": [1, 2, 3]}\n"
-            "If no ads are found, return: {\"advert_indices\": []}\n\n"
-            f"Transcript Segment:\n{chunk_text}"
+            "You are analyzing a podcast transcript for advertisements.\n"
+            f"Identify all advertisement blocks in the SRT segment below (indices {first_idx} to {last_idx}).\n\n"
+            "Ads typically contain: sponsor mentions ('brought to you by', 'sponsored by', 'thanks to'), "
+            "product names, discount codes, website URLs, or calls to action.\n"
+            "Regular podcast content (interviews, news, banter, storytelling) is NOT an ad.\n"
+            "Ad breaks last 30 seconds to a few minutes. Multiple ads often run back-to-back with no gap between them.\n"
+            "If surrounding blocks are clearly ads, treat the whole run as a single ad break.\n\n"
+            "End of show credits and references to the show itself, should not be considered adverts.\n\n"
+            f"{overlap_context}"
+            "Return JSON with the SRT index ranges of all ads.\n"
+            "Example: {\"advert_ranges\": [[10, 15], [20, 20]]}\n"
+            "No ads: {\"advert_ranges\": []}\n\n"
+            f"Transcript:\n{chunk_text}"
         )
-        
-
-        prompt = (
-             f"You are analyzing chunk of a podcast transcript.\n"
-            "Analyze the following transcript in SRT format and identify the index ranges of all advertisement blocks and sponsor reads.\n"
-            "These ads often have a fixed duration of 30 - 60 seconds and are frequently clumped together back-to-back.\n"
-            f"Only return indices between {first_idx} and {last_idx} — the range present in this segment.\n"
-            "Format of response MUST be JSON: {\"advert_indices\": [1, 2, 3]}\n"
-            "If no ads are found, return: {\"advert_indices\": []}\n\n"
-            f"Transcript Segment:\n{chunk_text}"
-        )
-        """
 
         try:
-            print(f"  Analyzing chunk {i+1}/{len(chunks)}...")
+            print(f"  Analyzing chunk {chunk_count} (blocks {current_start_idx} to {current_start_idx+len(chunk)})...")
+            chunk_success = False
 
             # Build the set of SRT indices actually present in this chunk for validation
             valid_chunk_indices = set()
             for block in chunk:
                 lines = block.strip().split("\n")
                 try:
-                    valid_chunk_indices.add(int(lines[0].strip()))
+                    idx = int(lines[0].strip())
+                    valid_chunk_indices.add(idx)
+                    block_coverage[idx] += 1  # Track how many chunks see each block
                 except (ValueError, IndexError):
                     continue
 
@@ -240,7 +263,7 @@ def detect_adverts(srt_file, raw_folder):
                 {"role": "user", "content": prompt}
             ]
 
-            max_retries = 4
+            max_retries = 2
             for attempt in range(max_retries + 1):
                 response = requests.post(
                     ollama_url,
@@ -250,7 +273,7 @@ def detect_adverts(srt_file, raw_folder):
                         "stream": False,
                         "format": "json",
                         "options": {
-                            "temperature": 0.0
+                            "temperature": 0.1
                         }
                     },
                     timeout=None  # Wait as long as needed - real failures will raise, not silently skip
@@ -262,9 +285,18 @@ def detect_adverts(srt_file, raw_folder):
                     
                     # Guard against Ollama occasionally returning empty content
                     if not content.strip():
-                        print(f"    -> Warning: Empty response from Ollama for chunk {i+1}, skipping.")
-                        break
-
+                        if attempt < max_retries:
+                            print(f"    -> Warning: Empty response from Ollama for chunk {chunk_count}. Retrying ({attempt+1}/{max_retries})...")
+                            messages.append({"role": "assistant", "content": ""})
+                            messages.append({
+                                "role": "user", 
+                                "content": "Error: You returned an empty response. You MUST return a valid JSON object containing the 'advert_ranges' key. If there are no ads, return {\"advert_ranges\": []}."
+                            })
+                            continue
+                        else:
+                            print(f"    -> Warning: Max retries reached for empty responses for chunk {chunk_count}. Triggering jitter.")
+                            break
+                            
                     data = json.loads(content)
                     ranges = data.get("advert_ranges", [])
                     
@@ -284,34 +316,52 @@ def detect_adverts(srt_file, raw_folder):
                     validated = [idx for idx in indices if int(idx) in valid_chunk_indices]
                     hallucinated = [idx for idx in indices if int(idx) not in valid_chunk_indices]
 
-                    # If model hallucinated old/invalid indices, feed the error back into context and retry
-                    if hallucinated and attempt < max_retries:
-                        print(f"    -> Warning: Hallucinated indices {hallucinated}. Retrying ({attempt+1}/{max_retries})...")
-                        messages.append({"role": "assistant", "content": content})
-                        messages.append({
-                            "role": "user", 
-                            "content": f"Error: You returned indices {hallucinated} which are NOT present in this chunk. The valid indices for this chunk are between {first_idx} and {last_idx}. Please try again and ONLY return indices that physically exist in the transcript segment provided."
-                        })
-                        continue  # Retry with the updated message history!
-
-                    if hallucinated and attempt == max_retries:
-                        print(f"    -> Warning: Max retries reached. Discarding {len(hallucinated)} hallucinated index/indices.")
-
-                    if validated:
-                        print(f"    -> Found ad indices in chunk: {validated}")
+                    if hallucinated:
+                        print(f"    -> Warning: Model hallucinated {len(hallucinated)} indices (e.g. {hallucinated[:3]}). Triggering jitter.")
+                        # Leaving chunk_success as False will trigger the jitter logic below
+                        break
                     else:
-                        print(f"    -> No ads detected in chunk.")
-                        
-                    for idx in validated:
-                        ad_block_indices.add(int(idx))
-                        
-                    break  # Success! Exit the retry loop
+                        if validated:
+                            print(f"    -> Found ad indices in chunk: {validated}")
+                        else:
+                            print(f"    -> No ads detected in chunk.")
+                            
+                        for idx in validated:
+                            ad_block_votes[int(idx)] += 1
+                            
+                        chunk_success = True
+                        break # Success!
                 else:
                     print(f"    -> Error calling Ollama (Status {response.status_code}): {response.text}")
                     break
 
+            if not chunk_success:
+                if not jitter_applied and current_start_idx >= 15:
+                    print(f"    -> Chunk failed completely. Applying a 15-block backward jitter and retrying...")
+                    current_start_idx -= 15
+                    jitter_applied = True
+                    continue  # Try the while loop again at new index
+                else:
+                    print(f"    -> Chunk failed completely despite jitter (or at start). Moving on.")
+                    current_start_idx += step
+                    jitter_applied = False
+            else:
+                current_start_idx += step
+                jitter_applied = False
+
         except Exception as e:
             print(f"    -> Exception occurred during chunk analysis: {e}")
+            current_start_idx += step
+            jitter_applied = False
+
+    # Build the final ad block set using consensus voting.
+    # A block must be flagged by at least as many chunks as it was seen by (capped at 2).
+    # This eliminates false positives from a single chunk over-extending at a boundary,
+    # while preserving true ads that only appear in one chunk (e.g., intro ads).
+    ad_block_indices = {
+        idx for idx, votes in ad_block_votes.items()
+        if votes >= min(2, block_coverage.get(idx, 1))
+    }
 
     # Filter and write matching blocks to the .ad file
     ad_blocks = []

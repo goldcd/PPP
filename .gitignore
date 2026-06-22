@@ -4,3 +4,6 @@ data/
 __pycache__/
 *.pyc
 .venv/
+*prototype*
+archive/
+app/*.md
