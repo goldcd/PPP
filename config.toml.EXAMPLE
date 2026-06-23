@@ -19,7 +19,7 @@ model_to_use = "small.en"
 ollama_url = "http://localhost:11434/api/chat"
 #Mode to use for detecting adverts, based on whether it's GPU or not
 gpu_model = "qwen3:14b"
-cpu_model = "qwen2.5:7b"
+cpu_model = "qwen3:8b"
 
 
 [processing]

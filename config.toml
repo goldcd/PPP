@@ -19,13 +19,13 @@ model_to_use = "small.en"
 ollama_url = "http://localhost:11434/api/chat"
 #Mode to use for detecting adverts, based on whether it's GPU or not
 gpu_model = "qwen3:14b"
-cpu_model = "qwen2.5:7b"
+cpu_model = "qwen3:8b"
 
 
 [processing]
 # Set to true to force CPU-only processing, even if a GPU is available.
 # I'm just using this for testing. No good reason you should ever change this
-force_cpu = false
+force_cpu = true
 # Set to true to insert a subtle 'pop' sound where an advert/segment was deleted
 insert_edit_pop = true
 

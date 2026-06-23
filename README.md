@@ -57,6 +57,5 @@ The current scope is to:
 - Assumes Ollama is installed locally on default port
 - I'd like to find a way to dump the output somewhere web-accessible (i.e. so I don't have to have the app running, to transfer to my phone)
 - Only really been tested against my personal needs/PC
-
-
-- 
+- No mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
+- Currently we hard-cut adverts. Not seen mistakes yet, but they'll happen. Maybe add a chapter annotation as a mandatory feature. Then can have the cutting of adverts as an optional extra (I'll need to check what podcast players know to skip advert chapters, and what triggers them)

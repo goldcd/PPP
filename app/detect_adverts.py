@@ -80,7 +80,7 @@ def start_ollama():
         model_to_use = ollama_config.get("gpu_model", "qwen3:14b")
         print(f"\n Using GPU model '{model_to_use}' for advert detection \n")
     else:
-        model_to_use = ollama_config.get("cpu_model", "qwen2.5:7b")
+        model_to_use = ollama_config.get("cpu_model", "qwen3:8b")
         print(f"\n Using CPU model '{model_to_use}' for advert detection \n")
     
     # Pre-warm/load the model into memory
