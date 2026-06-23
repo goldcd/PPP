@@ -94,6 +94,8 @@ def generate_all_cleaned():
     ET.register_namespace('content', 'http://purl.org/rss/1.0/modules/content/')
 
     # We should process ALL active podcasts, not just ones we just generated, in case we need to rebuild the RSS
+    ## Another bit I threw at AI. Cleaning up the RSS so it didn't get conflated with the original feed was a bastard
+    ## 
     for folder in os.listdir("data"):
         folder_path = os.path.join("data", folder)
         if os.path.isdir(folder_path):
@@ -120,13 +122,16 @@ def generate_all_cleaned():
                             if link.get('rel') == 'self':
                                 channel.remove(link)
                                 
-                        # Prefix the channel title
+                        ## Adding a prefix of PPP to all of our channels that we create, so they can be differentiated from the original
+                        ## Should probably make more changes in the future (e.g. the image) - a nice black/white version or something? PPP overlay?
                         channel_title = channel.find('title')
                         if channel_title is not None and channel_title.text:
                             if not channel_title.text.startswith("PPP: "):
                                 channel_title.text = f"PPP: {channel_title.text}"
                                 
-                        # Change channel link to avoid matching original feed
+                        ## Change channel link to avoid matching original feed
+                        ## Again - might need to add more of this later. Every app will I'm sure have different rules.. 
+                        ## and makes sense they don't want impersonators to on-board and swap the adverts.. actually maybe in PPP v2? 
                         channel_link = channel.find('link')
                         if channel_link is not None:
                             channel_link.text = "http://localhost/ppp"
@@ -184,6 +189,7 @@ def generate_all_cleaned():
                         for item in items_to_remove:
                             channel.remove(item)
                             
+                    ##and we're done
                     tree.write(output_rss_path, encoding='utf-8', xml_declaration=True)
                     print(f"Tidied up RSS feed: {output_rss_path}")
                 except Exception as e:

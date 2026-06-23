@@ -24,8 +24,9 @@ cpu_model = "qwen3:8b"
 
 [processing]
 # Set to true to force CPU-only processing, even if a GPU is available.
-# I'm just using this for testing. No good reason you should ever change this
-force_cpu = true
+# I'm just using this for testing. No good reason you should ever change this - it should fall back to CPU automatically if you don't have an nvidia GPU
+force_cpu = false
+
 # Set to true to insert a subtle 'pop' sound where an advert/segment was deleted
 insert_edit_pop = true
 

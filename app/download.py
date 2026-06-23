@@ -36,7 +36,7 @@ def download():
         for item in root.findall("channel/item"):
             pubdate = item.find("pubDate").text
             
-            # Parse the pubDate, and strip timezone info to make it naive for comparison
+            # Parse the pubDate, and strip timezone info to make it easy for comparison
             pubdate = email.utils.parsedate_to_datetime(pubdate).replace(tzinfo=None)
             
             if pubdate > syncfrom_date:

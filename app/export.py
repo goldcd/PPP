@@ -14,6 +14,7 @@ else:
 def export():
     print("Exporting podcasts...")
 
+    ##As export is an optional step, if this isn't setup in config, we just don't bother.
     if not os.path.exists("config.toml"):
         print("config.toml not found. Skipping export.")
         return
@@ -35,7 +36,8 @@ def export():
     if not export_path:
         print("Export path is empty in config. Skipping.")
         return
-
+    ##OK, at this point, we've done our checks, and now we're going ahead with an actual export.
+    ##As a general pattern, we're always going to push the HTML and RSS feeds - but not overwrite podcasts, if they're already there.
     os.makedirs(export_path, exist_ok=True)
 
     ## Read feeds to know what we have
@@ -48,6 +50,7 @@ def export():
 
     feed_links = []
 
+    ##Now start going through our output path, to see what we need to push to export
     for feed in feeds:
         feed_id = str(feed.get("id"))
         feed_title = feed.get("title", f"Podcast {feed_id}")
@@ -71,11 +74,16 @@ def export():
                 continue
                 
             has_files = True
-                
+
+            ##MP3s just get a straight copy    
             if filename.endswith(".mp3"):
                 if not os.path.exists(target_file):
                     print(f"Exporting MP3: {feed_title} -> {filename}")
                     shutil.copy2(source_file, target_file)
+            ##RSS is more complex, as we're going to modify the official one we grabbed
+            ## 1) We only want it to include episode .mp3s that we've actually got copies (not the full feed)
+            ## 2) We need to modify the path to the file. Relative didn't work, so we take add a prefix you set in settings, so it's absolute
+            ##    Maybe we could actually tidy this up later, and add some logic to the feed itself (I do like the idea of making it portable) 
             elif filename == "rss.xml":
                 print(f"Exporting RSS: {feed_title} -> {filename}")
                 if base_url:
@@ -89,6 +97,7 @@ def export():
                                 if enclosure is not None:
                                     url = enclosure.get("url", "")
                                     if url and not url.startswith("http"):
+                                        ## And there we have our file. Woop
                                         enclosure.set("url", f"{base_url}/{feed_id}/{url}")
                         tree.write(target_file, encoding='utf-8', xml_declaration=True)
                     except Exception as e:
@@ -105,6 +114,10 @@ def export():
             feed_links.append((feed_id, feed_title))
             
     ## Now generate the index.html at the root of the export path
+    ## AI did this.. it seemingly likes making stuff overly-complicated
+    ## Bit I wouldn't have solved is the overcoming of the caching at the bottom - it would appears pocketcasts isn't just "saving the RSS I supply"
+    ## So presume this means when people try other apps, we'll hit all manner of other problems with them as well.
+    ## Should just have added a plain RSS button
     html_content = [
         "<!DOCTYPE html>",
         "<html>",
@@ -163,6 +176,7 @@ def export():
         "    <ul>"
     ]
 
+    ## Only tested this on Pocket-Casts. I'm sure AI wouldn't lie to me about the others
     for feed_id, title in feed_links:
         html_content.append(f"        <li>")
         html_content.append(f"            <a href=\"{feed_id}/rss.xml\">{title}</a>")
