@@ -5,12 +5,26 @@ import json
 import xml.etree.ElementTree as ET
 import datetime
 import shutil
+import re
 
 ##Seemingly necessary for python 3.10 (where tomllib doesn't exist)
 if sys.version_info >= (3, 11):
     import tomllib as toml
 else:
     import tomli as toml
+
+##Using onboarding index to store podcast in filesystem (e.g. /data/raw/1/) caused a problem.
+## IF you add/removed a podcast, it might end up with a different integer, and then ultimately causes to path to the output RSS file to change - this is bad
+## function generates a 'safe' string path for the podcast we can rely on
+def generate_safe_path(title):
+    ## Convert to lowercase
+    safe_title = title.lower()
+    ## Replace any non-alphanumeric character with a hyphen
+    safe_title = re.sub(r'[^a-z0-9]+', '-', safe_title)
+    ## Strip leading and trailing hyphens
+    safe_title = safe_title.strip('-')
+    ## Now send back a lovely name
+    return safe_title
 
 def add_RSS():
     
@@ -59,8 +73,17 @@ def add_RSS():
     while nextID in used_ids:
         nextID += 1
     
-    ##Create a child folder in the data folder for this podcast, using the ID as the name
-    os.makedirs(f"data/{nextID}", exist_ok=True)
+    ##Generate a safe string path for the podcast directory based on the title
+    base_safe_name = generate_safe_path(title)
+    safe_name = base_safe_name
+    used_safe_names = {feed.get("safe_name") for feed in feeds}
+    counter = 1
+    while safe_name in used_safe_names:
+        safe_name = f"{base_safe_name}-{counter}"
+        counter += 1
+    
+    ##Create a child folder in the data folder for this podcast, using the safe_name as the name
+    os.makedirs(f"data/{safe_name}", exist_ok=True)
     
 
     ##For now just set the current date-stamp as syncfrom, less the lookback from the config file
@@ -72,7 +95,7 @@ def add_RSS():
     syncfrom = sync_date.isoformat()
 
     ##Now append the entry to our feeds list
-    feeds.append({"id":nextID,"title":title,"url":rss_url, "syncFrom": syncfrom})
+    feeds.append({"id":nextID,"title":title,"url":rss_url, "syncFrom": syncfrom, "safe_name": safe_name})
     
     ##And finally save it back to file
     save_feed_file(feeds)
@@ -103,16 +126,22 @@ def delete_RSS():
     ##Open the file
     feeds = get_feed_file()
     ##Check if the ID exists
-    if id_to_delete not in {feed["id"] for feed in feeds}:
+    feed_to_delete = next((feed for feed in feeds if feed["id"] == id_to_delete), None)
+    if not feed_to_delete:
         print("ID not found.")
         return
+        
+    safe_name = feed_to_delete.get("safe_name", str(id_to_delete))
+    
     ##Remove the feed
     feeds = [feed for feed in feeds if feed["id"] != id_to_delete]
     ##Save the file
     save_feed_file(feeds)
 
     ##Delete the child folder associated with this feed, including all subfolders and files within
-    shutil.rmtree(f"data/{id_to_delete}")
+    folder_to_delete = f"data/{safe_name}"
+    if os.path.exists(folder_to_delete):
+        shutil.rmtree(folder_to_delete)
 
     print(f"Deleted feed with ID {id_to_delete}.")
     

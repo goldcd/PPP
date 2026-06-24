@@ -53,10 +53,11 @@ def export():
     ##Now start going through our output path, to see what we need to push to export
     for feed in feeds:
         feed_id = str(feed.get("id"))
+        safe_name = feed.get("safe_name", feed_id)
         feed_title = feed.get("title", f"Podcast {feed_id}")
         
-        source_dir = os.path.join("data", feed_id, "output")
-        target_dir = os.path.join(export_path, feed_id)
+        source_dir = os.path.join("data", safe_name, "output")
+        target_dir = os.path.join(export_path, safe_name)
         
         if not os.path.exists(source_dir):
             continue
@@ -98,7 +99,7 @@ def export():
                                     url = enclosure.get("url", "")
                                     if url and not url.startswith("http"):
                                         ## And there we have our file. Woop
-                                        enclosure.set("url", f"{base_url}/{feed_id}/{url}")
+                                        enclosure.set("url", f"{base_url}/{safe_name}/{url}")
                         tree.write(target_file, encoding='utf-8', xml_declaration=True)
                     except Exception as e:
                         print(f"Failed to rewrite RSS {source_file}: {e}")
@@ -111,7 +112,7 @@ def export():
                     shutil.copy2(source_file, target_file)
                     
         if has_files:
-            feed_links.append((feed_id, feed_title))
+            feed_links.append((safe_name, feed_title))
             
     ## Now generate the index.html at the root of the export path
     ## AI did this.. it seemingly likes making stuff overly-complicated

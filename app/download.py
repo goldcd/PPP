@@ -11,7 +11,8 @@ def download():
     feeds = get_feed_file()
     for feed in feeds:
         ##If it doesn't exist, create a subfolder called "raw" within our podcasts folder. We'll use this to store what we download
-        podcast_folder = f"data/{feed['id']}"
+        safe_name = feed.get("safe_name", str(feed["id"]))
+        podcast_folder = f"data/{safe_name}"
         raw_folder = os.path.join(podcast_folder, "raw")
         os.makedirs(raw_folder, exist_ok=True)
 

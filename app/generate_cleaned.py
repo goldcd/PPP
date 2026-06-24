@@ -41,7 +41,7 @@ def generate_all_cleaned():
         return
 
     ##Now we need to determine which podcasts we have to process.
-    ## First of all, loop through all the /raw files under the integer files
+    ## First of all, loop through all the podcast folders in the data directory
     ## Then we look for a .mp3 and .ad file pair, where an .mp3 with the same name doesn't exist in the output folder
     ## Add the path and filename into a list as a tuple
     ## Once we have this list, we should print out the number of podcasts we found
