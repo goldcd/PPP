@@ -94,13 +94,16 @@ def transcribe(mp3_file, raw_folder):
     
     srt_path = os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt"))
     #AI to the rescue - although think I could have done that myself.. well googled it..
+    srt_blocks = []
+    for i, segment in enumerate(segments, start=1):
+        start = format_srt_time(segment.start)
+        end = format_srt_time(segment.end)
+        text = segment.text.strip()
+        
+        srt_blocks.append(f"{i}\n{start} --> {end}\n{text}\n\n")
+        
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, segment in enumerate(segments, start=1):
-            start = format_srt_time(segment.start)
-            end = format_srt_time(segment.end)
-            text = segment.text.strip()
-            
-            f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+        f.writelines(srt_blocks)
             
     elapsed_time = time.time() - start_time
     print(f"Finished transcribing {mp3_file} in {elapsed_time:.1f} seconds")

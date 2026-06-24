@@ -11,6 +11,31 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as toml
 
+"""
+
+This script processes transcription (.srt) files to detect and isolate adverts using an LLM and scoring
+
+1. Discovery (detect_all_adverts):
+   - Scans the 'data' directory for podcasts and their 'raw' folders.
+   - Finds any '.srt' files that do not yet have a corresponding '.ad' file .
+   - If unprocessed files are found, we start processing.
+
+2. Model Initialization (start_ollama / stop_ollama):
+   - Reads 'config.toml' to determine the LLM API endpoint and which model to use.
+   - Automatically selects between a CPU or GPU model based on hardware availability and configuration.
+   - Warms up/loads the model into memory, and optionally downloads it if it is missing locally.
+
+3. Processing Individual Transcripts (detect_adverts):
+   - Reads the configuration to identify which content categories the user wants to remove (e.g., 'sponsor_read', 'podcast_promotion').
+   - Parses the raw .srt file into a list of block dictionaries (parse_srt_blocks) containing the index, text, and raw string.
+   - Topic Mapping (ask_phase1_topics): Chunks the blocks (with overlap) and prompts the LLM to partition the transcript into 
+     contiguous topics. The LLM categorizes each segment into types like 'sponsor_read', 'show_content', etc.
+   - Scoring (score_topic): Evaluates each identified topic based on its category, duration, and keyword matches to generate a "spam score".
+   - Flagging & Gap Filling: Flags topics for removal if they match the user's config categories OR if they achieve a high spam score
+     (catching stealthy ads). It then bridges small gaps between flagged segments to create continuous ad blocks.
+   - Finally, writes out the flagged SRT blocks into a new '.ad' file for downstream removal.
+"""
+
 
 # Global variables for Ollama (set when try to start it)
 ollama_url = None   
@@ -64,7 +89,7 @@ def detect_all_adverts():
         return
 
 ##Function to determine which ollama model to use and load it up
-##AI did this
+##AI did this - should grab any model it needs (assuming it's in Ollama and it's not hallucinating names again - check this, if you change it and see errors..)
 def start_ollama():
     global ollama_url, model_to_use
     
@@ -185,9 +210,12 @@ def ask_phase1_topics(url, model, blocks_subset):
         "}"
     )
     
+    # Format the user message to include the actual transcript subset being processed.
     user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nMap topics in JSON."
     
     try:
+        # Make a POST request to the local LLM API (e.g., Ollama).
+        # Temperature is set to 0.0 for more deterministic and consistent output formatting.
         r = requests.post(
             url,
             json={
@@ -205,41 +233,57 @@ def ask_phase1_topics(url, model, blocks_subset):
             },
             timeout=90,
         )
+        # Process the successful response
         if r.status_code == 200:
+            # Extract the raw content from the response message
             raw = r.json().get("message", {}).get("content", "").strip()
+            
+            # Clean up the output in case the LLM wrapped the JSON in markdown code blocks
             if "```json" in raw:
                 raw = raw.split("```json")[1].split("```")[0].strip()
             elif "```" in raw:
                 raw = raw.split("```")[1].split("```")[0].strip()
                 
+            # Parse the cleaned string into a JSON dictionary
             data = json.loads(raw)
+            # Retrieve the list of topics from the parsed JSON
             topics = data.get("topics", [])
+            
+            # Ensure the API returned a list as expected
             if not isinstance(topics, list):
                 return None, "topics is not a list in JSON output"
                 
             cleaned = []
+            # Iterate through each topic to validate and clean up the data
             for t in topics:
+                # Ensure the topic entry is a dictionary
                 if not isinstance(t, dict):
                     continue
+                # Extract title and category, providing defaults if missing
                 title = t.get("title", "Unknown")
                 category = t.get("category", "other")
                 
+                # Extract start and end indices, accounting for potential key name variations from the LLM
                 s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx")
                 e_idx = t.get("end_idx") or t.get("end_index") or t.get("end_rx")
                 
+                # Skip topic if it lacks valid start or end index references
                 if s_idx is None or e_idx is None:
                     continue
                 try:
+                    # Convert indices to integers
                     s_val = int(s_idx)
                     e_val = int(e_idx)
                     
-                    # Clamp indices to the valid range of current subset
+                    # Clamp the indices to ensure they fall within the bounds of the current chunk
                     s_val = max(min_idx, min(max_idx, s_val))
                     e_val = max(min_idx, min(max_idx, e_val))
                     
+                    # Ensure the start index is less than or equal to the end index
                     if s_val > e_val:
                         s_val, e_val = e_val, s_val
                         
+                    # Append the sanitized topic data to our cleaned list
                     cleaned.append({
                         "title": str(title),
                         "start_idx": s_val,
@@ -247,11 +291,15 @@ def ask_phase1_topics(url, model, blocks_subset):
                         "category": str(category).lower()
                     })
                 except (ValueError, TypeError):
+                    # Ignore and drop any topics where indices couldn't be parsed as integers
                     pass
+            # Return the successfully cleaned list of topics
             return cleaned, None
         else:
+            # Handle HTTP errors from the API
             return None, f"API Error: Status {r.status_code} - {r.text}"
     except Exception as e:
+        # Handle connection errors or other exceptions during the request
         return None, f"Request Error: {e}"
 
 
@@ -282,7 +330,7 @@ def score_topic(topic):
         score -= 8
         
     # 3. Keyword Check
-    keywords = ["sponsor", "code", "discount", "website", "support for", "creator destroy", "promo", "advertisement", "advertise", "subscribe", "newsletter", "offer"]
+    keywords = ["sponsor", "code", "discount", "website", "support for", "creator destroy", "promo", "advertisement", "advertise", "subscribe", "newsletter", "offer", "visit"]
     found_kw = False
     for kw in keywords:
         if kw in cat or kw in title:
@@ -335,6 +383,7 @@ def detect_adverts(srt_file, raw_folder):
         print("Failed to parse SRT blocks.")
         return
         
+    ##Number of chunks we feed into the LLM at once, along with the overlap between them (i.e. if advert is on boundary, it'll get picked up on other iteration in context)
     total = len(blocks)
     chunk_size = 120
     overlap = 15
