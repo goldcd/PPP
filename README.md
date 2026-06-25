@@ -21,8 +21,8 @@ The current scope is to:
 ## Prerequisites
 
 - Python (run script should create venv)
-- Disk space (run script will be downloading models, plus whatever you need for your podcasts
-- nVidia GPU ideally, but should fall back to CPU (fast on Apple, not fast on anything else)
+- Disk space (run script will be downloading models, plus whatever you need for your podcasts)
+- nVidia GPU ideally, but should fall back to CPU (fast on Apple, not so fast on anything else - maybe 3x realtime)
 - Ollama
 
 
