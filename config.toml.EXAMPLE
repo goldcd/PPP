@@ -17,6 +17,7 @@ model_to_use = "small.en"
 [ollama]
 #We're using Ollama to detect the adverts. i.e. These are separate models to transcribing configured above
 ollama_url = "http://localhost:11434/api/chat"
+
 #Mode to use for detecting adverts, based on whether it's GPU or not
 gpu_model = "qwen3:14b"
 cpu_model = "qwen3:8b"
@@ -24,7 +25,7 @@ cpu_model = "qwen3:8b"
 
 [processing]
 # Set to true to force CPU-only processing, even if a GPU is available.
-# I'm just using this for testing. No good reason you should ever change this
+# I'm just using this for testing. No good reason you should ever change this - it should fall back to CPU automatically if you don't have an nvidia GPU
 force_cpu = false
 
 # Set to true to insert a subtle 'pop' sound where an advert/segment was deleted
@@ -44,5 +45,7 @@ other = false
 export_activated = false
 # The path where the web folder structure should be built. E.g. "C:/my_web_server/podcasts"
 export_path = "W:/ppp"
+
 # The base URL where this folder will be hosted. E.g. "http://192.168.1.100/ppp"
-base_url = "http://YOUR_SERVER_IP/ppp"
+# Your podcast app is probably going to verify this, you'll probably want this to be a public webserver
+base_url = "https://bobpitch.com/ppp"
