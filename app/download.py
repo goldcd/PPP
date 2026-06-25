@@ -48,11 +48,19 @@ def download():
                 guid = item.find("guid").text
                 import re
                 safe_guid = re.sub(r'[\\/*?:"<>|]', '_', guid)
+                
+                ## Added this as before if you moved the clock back, it was re-downloading.
+                ## Wasteful, but might pollute e2e feed if source has dynamic adverts (i.e. we might have SRT aligned to previous MP3 grab, but then apply this to updated MP3)
+                mp3_path = os.path.join(raw_folder, f"{safe_guid}.mp3")
+                if os.path.exists(mp3_path):
+                    print(f"Skipping download, file already exists: {safe_guid}.mp3")
+                    continue
+
                 ##Get the media url
                 media_url = item.find("enclosure").get("url")
                 ##Download the file, and save it with the guid as the filename
                 download_response = requests.get(media_url)
-                with open(os.path.join(raw_folder, f"{safe_guid}.mp3"), "wb") as f:
+                with open(mp3_path, "wb") as f:
                     f.write(download_response.content)
 
         ##New we've grabbed any new podcasts, we should update the syncfrom date to be the current date
