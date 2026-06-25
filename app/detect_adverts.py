@@ -317,9 +317,7 @@ def score_topic(topic):
         score += 10
     elif cat == "podcast_promotion":
         score += 10
-    # Note: intro_outro, show_content, and self_promotion get 0 base category score 
-    elif "other" in cat:
-        score += 2
+    # Note: intro_outro, show_content, other, and self_promotion get 0 base category score
         
     # 2. Duration Weighting
     if duration <= 40:
