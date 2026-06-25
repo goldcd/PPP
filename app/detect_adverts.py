@@ -114,7 +114,7 @@ def start_ollama():
         response = requests.post(
             ollama_url,
             json={"model": model_to_use, "messages": [], "stream": False},
-            timeout=10
+            timeout=120
         )
         if response.status_code == 404:
             print(f"Model '{model_to_use}' not found locally. Initiating download...")
