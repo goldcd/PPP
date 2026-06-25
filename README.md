@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Goal of this app is to provide a proxy for your podcasts, which will modify the raw feed in useful ways - initially advert removal.
+Provide a proxy for your podcasts - with the adverts removed.
 
-App should be entirely self-contained, allowing podcasts to be processed and served from your local machine, without external interaction.
+Entirely self-contained/private. No cloud processing of data. No community annotations/corrections required.
 
 ## Scope
 
@@ -12,17 +12,19 @@ The current scope is to:
 - Allow you to onboard a public RSS podcast feed
 - Trigger a local download of this feed (defaults to last 7 days of episodes)
 - Generate an SRT transcription of each episode
-- Parse transcription to detect advert segments
+- Parse transcription to detect advert
+  - Firstly detect the thematic segments within the podcast
+  - Apply rules/weightings to segments, based on user config/preferences
+  - Generate SRT of content to be removed
 - Generate a 'cleaned' version of the podcast with these segments excised
-- Provide a server that allows you to subscribe this cleaned feed.
-
-
+- Optionally output a web page with modified feeds and podcasts, allowing you to subscribe to them however you normally do
 
 ## Prerequisites
 
 - Python (run script should create venv)
 - Disk space (run script will be downloading models, plus whatever you need for your podcasts)
-- nVidia GPU ideally, but should fall back to CPU (fast on Apple, not so fast on anything else - maybe 3x realtime)
+- nVidia GPU ideally, but should fall back to CPU 
+  - e2e processing on GPU ~ 15x on GPU, 3x on CPU (Apple should be faster, but not tried)
 - Ollama
 
 
@@ -54,8 +56,8 @@ The current scope is to:
 ## Known Issues / Limitations
 
 - Current versions isn't designed to operate from the CLI. I'll add this later, so this can more easily be run in the background/automated.
+  - #edit#I did hack in "grab_and_process_new_podcasts.bat" to just give you something to click to update existing feeds
 - Assumes Ollama is installed locally on default port
-- I'd like to find a way to dump the output somewhere web-accessible (i.e. so I don't have to have the app running, to transfer to my phone)
 - Only really been tested against my personal needs/PC
 - No mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
 - Currently we hard-cut adverts. Not seen mistakes yet, but they'll happen. Maybe add a chapter annotation as a mandatory feature. Then can have the cutting of adverts as an optional extra (I'll need to check what podcast players know to skip advert chapters, and what triggers them)

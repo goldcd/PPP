@@ -30,6 +30,7 @@ def download():
             return
 
         ##Work out how far back in this feed we should be looking, based upon the syncfrom date in the feeds file
+        ##I really should add an option to let the user override this when they on-board. Maybe config just becomes a pre-populated default
         syncfrom_date = datetime.datetime.fromisoformat(feed['syncFrom'])
 
         import email.utils
