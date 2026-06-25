@@ -36,7 +36,7 @@ The current scope is to:
   - Defaults lookback period to 7 days (can change this in config)
 - "Manage Podcast Processing"
   - Download
-    - Retrieves latest version of public RSS feed to data\<podcast id>\raw
+    - Retrieves latest version of public RSS feed to data\\<podcast>\raw
     - Downloads podcast mp3s (unless older than lookback or already downloaded)
   - Transcribe 
     - Generates ,srt transcription in data\<podcast id> for all podcasts without one
