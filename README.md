@@ -66,7 +66,7 @@ The current scope is to:
 
 ## Example
 
-Example of how PPP generates an overview of the show content from the transcription and scores them. If it scores too highly, it gets flagged and stripped on cleaned feed.
+Example of how PPP generates an overview of the show content from the transcription and scores them. If it scores too highly, it gets flagged and excised from podcast presented on cleaned feed.
 
 ```
 --- GENERATED TOPIC MAP & WEIGHTING ---
