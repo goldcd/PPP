@@ -185,14 +185,14 @@ def ask_phase1_topics(url, model, blocks_subset):
     sys_msg = (
         "You are a podcast content segmenter and topic mapper.\n"
         "Your task is to analyze this segment of the transcript and partition it chronologically into distinct topics or segments covered in the show.\n"
-        "Ensure every block index in the transcript segment is covered. The topics must be contiguous and cover all block indices from the start to the end.\n\n"
+        "CRITICAL INSTRUCTION: You MUST NOT skip or drop any block indices! Every single block from the first index to the last index MUST be included in exactly one topic. Do not omit any part of the transcript, even if it is an advert. The topics must be strictly contiguous with no gaps.\n\n"
         "For each topic, identify:\n"
         "1. Short title\n"
         "2. Start block index and end block index (inclusive)\n"
         "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion','intro_outro', 'other'.\n\n"
         "Category Definitions:\n"
         "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
-        "- 'sponsor_read': Commercial pitches for external products/services (e.g. NetSuite, Klaviyo, Odoo, Vanta, LinkedIn, etc.).\n"
+        "- 'sponsor_read': Commercial pitches for external companies/products/services (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.) and any other kind of commercial or sponsorship promotion.\n"
         "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
         "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
         "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n"
@@ -328,7 +328,7 @@ def score_topic(topic):
         score -= 8
         
     # 3. Keyword Check
-    keywords = ["sponsor", "code", "discount", "website", "support for", "creator destroy", "promo", "advertisement", "advertise", "subscribe", "newsletter", "offer", "visit"]
+    keywords = ["sponsor", "code", "discount", "website", "support for", "creator destroy", "promo", "advertisement", "advertise", "subscribe", "newsletter", "offer", "visit", "save", "saving", "price", "buy", "purchase", "checkout", "money back"]
     found_kw = False
     for kw in keywords:
         if kw in cat or kw in title:

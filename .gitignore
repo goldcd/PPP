@@ -9,3 +9,5 @@ archive/
 app/*.md
 config.toml
 podcast_examples.md
+test_llm.py
+run_output.txt
