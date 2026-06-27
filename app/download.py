@@ -16,8 +16,10 @@ def download():
         raw_folder = os.path.join(podcast_folder, "raw")
         os.makedirs(raw_folder, exist_ok=True)
 
+        ##Added a fake user-agent header, as some RSS feeds didn't like being touched up directly by a script
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         ##Now grab the raw feed XML, and save it as rss.xml in the podcast_folder, overwriting if it exists
-        response = requests.get(feed['url'])
+        response = requests.get(feed['url'], headers=headers)
         with open(os.path.join(raw_folder, "rss.xml"), "w", encoding="utf-8") as f:
             f.write(response.text)
 
@@ -59,7 +61,7 @@ def download():
                 ##Get the media url
                 media_url = item.find("enclosure").get("url")
                 ##Download the file, and save it with the guid as the filename
-                download_response = requests.get(media_url)
+                download_response = requests.get(media_url, headers=headers)
                 with open(mp3_path, "wb") as f:
                     f.write(download_response.content)
 

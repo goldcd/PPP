@@ -306,6 +306,10 @@ def ask_phase1_topics(url, model, blocks_subset):
 ## Function to score the topics returned by the LLM, so we know if they should be yeeted
 ## We do this by checking the category, the duration, and looking for naughty keywords
 ## Anything scoring 6 or higher gets flagged as an advert
+
+## With the LLM improvements and current limitation on this (not checking the transcript etc, just the topic). Not quite sure if this is worth keeping..
+## I was wondering if instead we could either do another LLM pass? (i.e. the round 3 we had from the final prototype)
+
 def score_topic(topic):
     score = 0
     cat = topic["category"].lower()
