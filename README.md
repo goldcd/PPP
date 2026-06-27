@@ -140,3 +140,18 @@ Start  | End    | Duration | Category           | Score | Title
 1350   | 1360   | 11       | sponsor_read       | 17    | Dell PCs Sponsorship Pitch [FLAGGED]
 ----------------------------------------------------------------------------------------------------
 ```
+
+## Todo
+- Add debug
+- Re-implement the post LLM weighting - currently not actually doing much of use (also, make it review the actual transcript, rather than the summary)
+- Re-factor ad-detection as a whole. Too much of AI prototype still in there
+- Clean up export. Add new export mechanisms (FTP etc) and see if any serverless options available (google drive is a no, but must be alternatives)
+  - Actually - for another project, I wonder if you could create a server that feeds from anybody's google drive?
+  - Share path with server, then just proxy this through HTTP server with stuff like PHP, python etc running on it.
+- Export is run excessively - seem to always be pushing RSS
+- Refactor code to APIs, then restore current functionality with wrappers.
+- More lights-out
+- Dockerization
+  - Maybe with support to push processing to other machine
+  - i.e. I want to run container on my NAS to push feeds and detect new podcasts, but offload processing to my desktop if it's on.
+  - You've got the http/messaging module - so maybe nice project.
