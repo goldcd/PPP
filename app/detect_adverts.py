@@ -189,14 +189,13 @@ def ask_phase1_topics(url, model, blocks_subset):
         "For each topic, identify:\n"
         "1. Short title\n"
         "2. Start block index and end block index (inclusive)\n"
-        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion','intro_outro', 'other'.\n\n"
+        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.\n\n"
         "Category Definitions:\n"
         "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
         "- 'sponsor_read': Commercial pitches for external companies/products/services (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.) and any other kind of commercial or sponsorship promotion. Classify ALL obvious advertisements as sponsor_read!\n"
         "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
         "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
-        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n"
-        "- 'other': Any miscellaneous content that doesn't fit the above.\n\n"
+        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n\n"
         "You MUST return ONLY a valid JSON object in the following format:\n"
         "{\n"
         "  \"topics\": [\n"
@@ -261,7 +260,7 @@ def ask_phase1_topics(url, model, blocks_subset):
                     continue
                 # Extract title and category, providing defaults if missing
                 title = t.get("title", "Unknown")
-                category = t.get("category", "other")
+                category = t.get("category", "show_content")
                 
                 # Extract start and end indices, accounting for potential key name variations from the LLM
                 s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx")
@@ -318,8 +317,7 @@ def detect_adverts(srt_file, raw_folder):
         "podcast_promotion": True,
         "self_promotion": False,
         "intro_outro": False,
-        "show_content": False,
-        "other": False
+        "show_content": False
     })
     
     srt_path = os.path.join(raw_folder, srt_file)

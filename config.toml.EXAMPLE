@@ -38,7 +38,6 @@ podcast_promotion = true
 self_promotion = false
 intro_outro = false
 show_content = false
-other = false
 
 [export]
 # Set to true to activate exporting of cleaned podcasts to a separate directory
