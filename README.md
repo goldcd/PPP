@@ -53,17 +53,6 @@ The current scope is to:
   - Executes all of the "Manage Podcast Processing" options in order
   
   
-## Known Issues / Limitations
-
-- Current versions isn't designed to operate from the CLI. I'll add this later, so this can more easily be run in the background/automated.
-  - #edit#I did hack in "grab_and_process_new_podcasts.bat" to just give you something to click to update existing feeds
-- Assumes Ollama is installed locally on default port
-- Only really been tested against my personal needs/PC
-- No mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
-- Currently we hard-cut adverts. Not seen mistakes yet, but they'll happen. Maybe add a chapter annotation as a mandatory feature. Then can have the cutting of adverts as an optional extra (I'll need to check what podcast players know to skip advert chapters, and what triggers them)
-
-
-
 ## Example
 
 Example of how PPP generates an overview of the show content from the transcription and scores them. If it scores too highly, it gets flagged and excised from podcast presented on cleaned feed.
@@ -155,3 +144,5 @@ Start  | End    | Duration | Category           | Score | Title
   - Maybe with support to push processing to other machine
   - i.e. I want to run container on my NAS to push feeds and detect new podcasts, but offload processing to my desktop if it's on.
   - You've got the http/messaging module - so maybe nice project.
+- Currently no mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
+- Currently we hard-cut adverts. Not seen mistakes yet, but they'll happen. Maybe add a chapter annotation as a mandatory feature. Then can have the cutting of adverts as an optional extra (I'll need to check what podcast players know to skip advert chapters, and what triggers them)
