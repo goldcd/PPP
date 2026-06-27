@@ -192,7 +192,7 @@ def ask_phase1_topics(url, model, blocks_subset):
         "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion','intro_outro', 'other'.\n\n"
         "Category Definitions:\n"
         "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
-        "- 'sponsor_read': Commercial pitches for external companies/products/services (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.) and any other kind of commercial or sponsorship promotion.\n"
+        "- 'sponsor_read': Commercial pitches for external companies/products/services (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.) and any other kind of commercial or sponsorship promotion. Classify ALL obvious advertisements as sponsor_read!\n"
         "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
         "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
         "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n"
@@ -303,46 +303,6 @@ def ask_phase1_topics(url, model, blocks_subset):
         return None, f"Request Error: {e}"
 
 
-## Function to score the topics returned by the LLM, so we know if they should be yeeted
-## We do this by checking the category, the duration, and looking for naughty keywords
-## Anything scoring 6 or higher gets flagged as an advert
-
-## With the LLM improvements and current limitation on this (not checking the transcript etc, just the topic). Not quite sure if this is worth keeping..
-## I was wondering if instead we could either do another LLM pass? (i.e. the round 3 we had from the final prototype)
-
-def score_topic(topic):
-    score = 0
-    cat = topic["category"].lower()
-    title = topic["title"].lower()
-    duration = topic["end_idx"] - topic["start_idx"] + 1
-    
-    # 1. Category Weighting
-    if "sponsor" in cat or "ad" in cat or "advert" in cat:
-        score += 10
-    elif cat == "podcast_promotion":
-        score += 10
-    # Note: intro_outro, show_content, other, and self_promotion get 0 base category score
-        
-    # 2. Duration Weighting
-    if duration <= 40:
-        score += 4
-    elif duration <= 60:
-        score += 1
-    elif duration > 70:
-        score -= 8
-        
-    # 3. Keyword Check
-    keywords = ["sponsor", "code", "discount", "website", "support for", "creator destroy", "promo", "advertisement", "advertise", "subscribe", "newsletter", "offer", "visit", "save", "saving", "price", "buy", "purchase", "checkout", "money back"]
-    found_kw = False
-    for kw in keywords:
-        if kw in cat or kw in title:
-            found_kw = True
-            break
-    if found_kw:
-        score += 3
-        
-    return score
-
 ## Top level function to call, to detect adverts (and now other stuff), in a single SRT file
 ## This is the new single-pass champion that chunks the SRT and passes it to Qwen to do all the heavy lifting
 def detect_adverts(srt_file, raw_folder):
@@ -426,31 +386,23 @@ def detect_adverts(srt_file, raw_folder):
         
     print(f"Topic mapping complete. Total raw topics mapped: {len(all_topics)}")
     
-    # --- PRINT TOPIC MAP TABLE & APPLY WEIGHTING ---
-    print("\n--- GENERATED TOPIC MAP & WEIGHTING ---")
-    print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Score':<5} | {'Title'}")
+    # --- PRINT TOPIC MAP TABLE ---
+    print("\n--- GENERATED TOPIC MAP ---")
+    print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Title'}")
     print("-" * 100)
     
     flagged_indices = set()
     
     for t in all_topics:
         duration = t["end_idx"] - t["start_idx"] + 1
-        score = score_topic(t)
         
         cat = t['category'].lower()
         
         # Check if the LLM's chosen category is toggled ON for removal in the config
         is_flagged = content_to_remove.get(cat, False)
-        
-        # Safety net: If the heuristic score is high (indicating a sneaky ad block)
-        # AND the user wants sponsor reads removed, flag it anyway,
-        # but ONLY if it wasn't explicitly categorised as a type the user wants to keep.
-        if not is_flagged and score >= 6 and content_to_remove.get("sponsor_read", True):
-            if cat in ["show_content", "other"]:
-                is_flagged = True
 
         flagged_str = "[FLAGGED]" if is_flagged else "       "
-        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {score:<5} | {t['title']} {flagged_str}")
+        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {t['title']} {flagged_str}")
         
         if is_flagged:
             for idx in range(t["start_idx"], t["end_idx"] + 1):
