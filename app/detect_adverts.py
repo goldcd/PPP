@@ -30,9 +30,7 @@ This script processes transcription (.srt) files to detect and isolate adverts u
    - Parses the raw .srt file into a list of block dictionaries (parse_srt_blocks) containing the index, text, and raw string.
    - Topic Mapping (ask_phase1_topics): Chunks the blocks (with overlap) and prompts the LLM to partition the transcript into 
      contiguous topics. The LLM categorizes each segment into types like 'sponsor_read', 'show_content', etc.
-   - Scoring (score_topic): Evaluates each identified topic based on its category, duration, and keyword matches to generate a "spam score".
-   - Flagging & Gap Filling: Flags topics for removal if they match the user's config categories OR if they achieve a high spam score
-     (catching stealthy ads). It then bridges small gaps between flagged segments to create continuous ad blocks.
+   - Flagging & Gap Filling: Flags topics for removal if they match the user's config categories It then bridges small gaps between flagged segments to create continuous ad blocks.
    - Finally, writes out the flagged SRT blocks into a new '.ad' file for downstream removal.
 """
 
@@ -171,13 +169,9 @@ def parse_srt_blocks(raw_blocks):
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
 def ask_phase1_topics(url, model, blocks_subset):
-    ##Determine the start and end index of the blocks we're passing in
-    valid_indices = {b['idx'] for b in blocks_subset}
-    ##Get the min and max of this set of indices
-    min_idx = min(valid_indices)
-    max_idx = max(valid_indices)
-    ##Combine the text of the blocks into a single string
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
+    num_blocks = len(blocks_subset)
+    ##Combine the text of the blocks into a single string, using relative 1-based indices
+    transcript_text = " ".join(f"[{i}] {b['text']}" for i, b in enumerate(blocks_subset, start=1))
     
     ##This request to map the segments into topics, is performing way way better than previous "take out the adverts!"
     ##Also Qwen is a champion. Second time I've come back to her. My eye should never have wandered..
@@ -201,8 +195,8 @@ def ask_phase1_topics(url, model, blocks_subset):
         "  \"topics\": [\n"
         "    {\n"
         "      \"title\": \"Topic Title\",\n"
-        "      \"start_idx\": 120,\n"
-        "      \"end_idx\": 180,\n"
+        "      \"start_idx\": 1,\n"
+        "      \"end_idx\": 20,\n"
         "      \"category\": \"show_content\"\n"
         "    }\n"
         "  ]\n"
@@ -210,7 +204,7 @@ def ask_phase1_topics(url, model, blocks_subset):
     )
     
     # Format the user message to include the actual transcript subset being processed.
-    user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nMap topics in JSON."
+    user_msg = f"Transcript Segment ({num_blocks} blocks):\n{transcript_text}\n\nMap topics in JSON."
     
     try:
         # Make a POST request to the local LLM API (e.g., Ollama).
@@ -274,19 +268,23 @@ def ask_phase1_topics(url, model, blocks_subset):
                     s_val = int(s_idx)
                     e_val = int(e_idx)
                     
-                    # Clamp the indices to ensure they fall within the bounds of the current chunk
-                    s_val = max(min_idx, min(max_idx, s_val))
-                    e_val = max(min_idx, min(max_idx, e_val))
+                    # Clamp the relative indices to ensure they fall within 1 to num_blocks
+                    s_val = max(1, min(num_blocks, s_val))
+                    e_val = max(1, min(num_blocks, e_val))
                     
                     # Ensure the start index is less than or equal to the end index
                     if s_val > e_val:
                         s_val, e_val = e_val, s_val
                         
+                    # Map the relative indices back to the absolute block indices
+                    real_s = blocks_subset[s_val - 1]['idx']
+                    real_e = blocks_subset[e_val - 1]['idx']
+                        
                     # Append the sanitized topic data to our cleaned list
                     cleaned.append({
                         "title": str(title),
-                        "start_idx": s_val,
-                        "end_idx": e_val,
+                        "start_idx": real_s,
+                        "end_idx": real_e,
                         "category": str(category).lower()
                     })
                 except (ValueError, TypeError):
