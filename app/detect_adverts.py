@@ -169,9 +169,13 @@ def parse_srt_blocks(raw_blocks):
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
 def ask_phase1_topics(url, model, blocks_subset):
-    num_blocks = len(blocks_subset)
-    ##Combine the text of the blocks into a single string, using relative 1-based indices
-    transcript_text = " ".join(f"[{i}] {b['text']}" for i, b in enumerate(blocks_subset, start=1))
+    ##Determine the start and end index of the blocks we're passing in
+    valid_indices = {b['idx'] for b in blocks_subset}
+    ##Get the min and max of this set of indices
+    min_idx = min(valid_indices)
+    max_idx = max(valid_indices)
+    ##Combine the text of the blocks into a single string
+    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
     
     ##This request to map the segments into topics, is performing way way better than previous "take out the adverts!"
     ##Also Qwen is a champion. Second time I've come back to her. My eye should never have wandered..
@@ -179,7 +183,11 @@ def ask_phase1_topics(url, model, blocks_subset):
     sys_msg = (
         "You are a podcast content segmenter and topic mapper.\n"
         "Your task is to analyze this segment of the transcript and partition it chronologically into distinct topics or segments covered in the show.\n"
-        "CRITICAL INSTRUCTION: You MUST NOT skip or drop any block indices! Every single block from the first index to the last index MUST be included in exactly one topic. Do not omit any part of the transcript, even if it is an advert. The topics must be strictly contiguous with no gaps.\n\n"
+        f"CRITICAL INSTRUCTION: Every single block from {min_idx} to {max_idx} MUST be included in a topic.\n"
+        "CRITICAL INSTRUCTION: The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
+        "CRITICAL INSTRUCTION: Break the transcript into AT LEAST 5 distinct topics based on natural conversation shifts.\n"
+        "CRITICAL INSTRUCTION: Carefully identify any advertisements or sponsor reads. They are usually short (2-10 blocks) and MUST be placed in their own isolated 'sponsor_read' topics.\n"
+        "CRITICAL INSTRUCTION: Ensure your topic lengths vary naturally according to the conversation (e.g. one topic might be 3 blocks long, another might be 45 blocks long).\n\n"
         "For each topic, identify:\n"
         "1. Short title\n"
         "2. Start block index and end block index (inclusive)\n"
@@ -190,13 +198,26 @@ def ask_phase1_topics(url, model, blocks_subset):
         "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
         "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
         "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n\n"
-        "You MUST return ONLY a valid JSON object in the following format:\n"
+        "You MUST return ONLY a valid JSON object matching the structure below. This is an example of variable-length chunking:\n"
         "{\n"
+        "  \"analysis\": \"I will first summarize the entire text from start to finish. I see an intro from blocks X-Y, a sponsor read for Brand Z from blocks A-B, and then main content...\",\n"
         "  \"topics\": [\n"
         "    {\n"
-        "      \"title\": \"Topic Title\",\n"
-        "      \"start_idx\": 1,\n"
-        "      \"end_idx\": 20,\n"
+        "      \"title\": \"Example Intro\",\n"
+        f"      \"start_idx\": {min_idx},\n"
+        f"      \"end_idx\": {min(max_idx, min_idx + 3)},\n"
+        "      \"category\": \"intro_outro\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"title\": \"Example Sponsor\",\n"
+        f"      \"start_idx\": {min(max_idx, min_idx + 4)},\n"
+        f"      \"end_idx\": {min(max_idx, min_idx + 11)},\n"
+        "      \"category\": \"sponsor_read\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"title\": \"Example Main Segment\",\n"
+        f"      \"start_idx\": {min(max_idx, min_idx + 12)},\n"
+        f"      \"end_idx\": {max_idx},\n"
         "      \"category\": \"show_content\"\n"
         "    }\n"
         "  ]\n"
@@ -204,7 +225,7 @@ def ask_phase1_topics(url, model, blocks_subset):
     )
     
     # Format the user message to include the actual transcript subset being processed.
-    user_msg = f"Transcript Segment ({num_blocks} blocks):\n{transcript_text}\n\nMap topics in JSON."
+    user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nMap topics in JSON."
     
     try:
         # Make a POST request to the local LLM API (e.g., Ollama).
@@ -268,23 +289,19 @@ def ask_phase1_topics(url, model, blocks_subset):
                     s_val = int(s_idx)
                     e_val = int(e_idx)
                     
-                    # Clamp the relative indices to ensure they fall within 1 to num_blocks
-                    s_val = max(1, min(num_blocks, s_val))
-                    e_val = max(1, min(num_blocks, e_val))
+                    # Clamp the indices to ensure they fall within the bounds of the current chunk
+                    s_val = max(min_idx, min(max_idx, s_val))
+                    e_val = max(min_idx, min(max_idx, e_val))
                     
                     # Ensure the start index is less than or equal to the end index
                     if s_val > e_val:
                         s_val, e_val = e_val, s_val
                         
-                    # Map the relative indices back to the absolute block indices
-                    real_s = blocks_subset[s_val - 1]['idx']
-                    real_e = blocks_subset[e_val - 1]['idx']
-                        
                     # Append the sanitized topic data to our cleaned list
                     cleaned.append({
                         "title": str(title),
-                        "start_idx": real_s,
-                        "end_idx": real_e,
+                        "start_idx": s_val,
+                        "end_idx": e_val,
                         "category": str(category).lower()
                     })
                 except (ValueError, TypeError):
@@ -343,8 +360,8 @@ def detect_adverts(srt_file, raw_folder):
         
     ##Number of chunks we feed into the LLM at once, along with the overlap between them (i.e. if advert is on boundary, it'll get picked up on other iteration in context)
     total = len(blocks)
-    chunk_size = 120
-    overlap = 15
+    chunk_size = 60
+    overlap = 10
 
     # --- TOPIC MAPPING ---
     print("\n--- Topic Mapping & Classification ---")
