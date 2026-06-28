@@ -279,7 +279,6 @@ def ask_phase1_topics(url, model, blocks_subset):
         "You are a podcast content segmenter and topic mapper.\n"
         "Your purpose is to fully and carefully analyse this provided segment of the show and then partition it chronologically into distinct topics or segments. This information can be used later to allow a podcast listener to decide what parts of the show they wish to omit.\n"
         "A simple way to consider this task, is that you're being asked to create the chapter markings for a podcast that lacks them.\n"
-        f"Note: The full podcast transcript is too long to process at once, so you are being given one chunk at a time. This chunk covers blocks {min_idx} to {max_idx}. The block numbers tell you where in the show you are — if the blocks start mid-show (e.g. block 100+), you may find a segment abruptly starts midway through, or cuts off at the end. Please still classify as best you can — any boundary issues will be resolved in post-processing..\n\n"
         "Your first step, before doing anything else, is to read the entire provided segment of the show from start to finish. Use this complete context to inform your decisions. This is critical - do not take shortcuts\n\n"
         "CRITICAL INSTRUCTION: Break the transcript into distinct topics based on shifts in the conversation. \n"
         "For each topic, identify:\n"
