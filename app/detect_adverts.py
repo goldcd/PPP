@@ -185,7 +185,7 @@ def ask_phase1_topics(url, model, blocks_subset):
         "Your task is to analyze this segment of the transcript and partition it chronologically into distinct topics or segments covered in the show.\n"
         f"CRITICAL INSTRUCTION: Every single block from {min_idx} to {max_idx} MUST be included in a topic.\n"
         "CRITICAL INSTRUCTION: The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
-        "CRITICAL INSTRUCTION: Break the transcript into AT LEAST 5 distinct topics based on natural conversation shifts.\n"
+        "CRITICAL INSTRUCTION: Break the transcript into distinct topics based on natural conversation shifts.\n"
         "CRITICAL INSTRUCTION: Carefully identify any advertisements or sponsor reads. They are usually short (2-10 blocks) and MUST be placed in their own isolated 'sponsor_read' topics.\n"
         "CRITICAL INSTRUCTION: Ensure your topic lengths vary naturally according to the conversation (e.g. one topic might be 3 blocks long, another might be 45 blocks long).\n\n"
         "For each topic, identify:\n"
@@ -359,6 +359,8 @@ def detect_adverts(srt_file, raw_folder):
         return
         
     ##Number of chunks we feed into the LLM at once, along with the overlap between them (i.e. if advert is on boundary, it'll get picked up on other iteration in context)
+    ##Should add this to config - currently hardcoded here for now
+    ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
     total = len(blocks)
     chunk_size = 60
     overlap = 10
