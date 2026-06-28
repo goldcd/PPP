@@ -20,8 +20,17 @@ def download():
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         ##Now grab the raw feed XML, and save it as rss.xml in the podcast_folder, overwriting if it exists
         response = requests.get(feed['url'], headers=headers)
-        with open(os.path.join(raw_folder, "rss.xml"), "w", encoding="utf-8") as f:
-            f.write(response.text)
+        rss_path = os.path.join(raw_folder, "rss.xml")
+        try:
+            with open(rss_path, "w", encoding="utf-8") as f:
+                f.write(response.text)
+        except OSError as e:
+            # If the file is locked or memory-mapped by another process (e.g., an IDE), opening for write can fail.
+            # Deleting the file bypasses this lock on Windows.
+            if os.path.exists(rss_path):
+                os.remove(rss_path)
+            with open(rss_path, "w", encoding="utf-8") as f:
+                f.write(response.text)
 
         ##Parse the XML with our XML parser of choice
         try:
