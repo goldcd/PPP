@@ -93,6 +93,11 @@ def export():
                         root = tree.getroot()
                         channel = root.find("channel")
                         if channel is not None:
+                            # Remove itunes:new-feed-url so podcast clients don't switch back to the original feed
+                            for child in list(channel):
+                                if child.tag.endswith('new-feed-url'):
+                                    channel.remove(child)
+
                             for item in channel.findall("item"):
                                 enclosure = item.find("enclosure")
                                 if enclosure is not None:
