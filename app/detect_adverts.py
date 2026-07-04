@@ -148,11 +148,29 @@ def stop_ollama():
 ## Function to convert the SRT into a list of dictionaries, for easier handling.
 def parse_srt_blocks(raw_blocks):
     blocks = []
+    
+    def parse_time(t_str):
+        t_str = t_str.replace(',', '.')
+        h, m, s = t_str.split(':')
+        return int(h) * 3600 + int(m) * 60 + float(s)
+
     for rb in raw_blocks:
         lines = rb.strip().split("\n")
         if len(lines) >= 3:
             try:
                 idx = int(lines[0].strip())
+                
+                # Parse time from line 2
+                time_line = lines[1].strip()
+                start_time = 0.0
+                end_time = 0.0
+                duration = 0.0
+                if " --> " in time_line:
+                    start_str, end_str = time_line.split(" --> ")
+                    start_time = parse_time(start_str)
+                    end_time = parse_time(end_str)
+                    duration = end_time - start_time
+
                 text = " ".join(lines[2:]).strip()
                 blocks.append({
                     ##The index of the block
@@ -160,7 +178,10 @@ def parse_srt_blocks(raw_blocks):
                     ##The content/transcript of the block
                     "text": text,
                     ##An unmolested and complete (but trimmed) version of the block as it appeared in the original file
-                    "raw": rb.strip()
+                    "raw": rb.strip(),
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": duration
                 })
             except Exception:
                 pass
@@ -572,3 +593,32 @@ def detect_adverts(srt_file, raw_folder):
         with open(ad_path, "w", encoding="utf-8") as f:
             pass
         print("No ads detected. Created empty .ad file.")
+
+    if blocks and len(blocks) > 0:
+        total_podcast_time = blocks[-1]['end_time'] - blocks[0]['start_time']
+        
+        # Calculate time of ads by grouping contiguous final_ads blocks
+        total_ad_time = 0.0
+        
+        ad_blocks_data = [b for b in blocks if b['idx'] in final_ads]
+        if ad_blocks_data:
+            current_start = ad_blocks_data[0]['start_time']
+            current_end = ad_blocks_data[0]['end_time']
+            last_idx = ad_blocks_data[0]['idx']
+            
+            for b in ad_blocks_data[1:]:
+                if b['idx'] == last_idx + 1:
+                    current_end = b['end_time']
+                else:
+                    total_ad_time += (current_end - current_start)
+                    current_start = b['start_time']
+                    current_end = b['end_time']
+                last_idx = b['idx']
+                
+            total_ad_time += (current_end - current_start)
+
+        if total_podcast_time > 0:
+            percentage = (total_ad_time / total_podcast_time) * 100
+            print(f"Percentage of podcast flagged for removal: {percentage:.1f}%")
+        else:
+            print("Percentage of podcast flagged for removal: 0.0%")
