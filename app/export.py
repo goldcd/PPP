@@ -182,6 +182,9 @@ def export():
         "    <ul>"
     ]
 
+    ## Sort the feed links alphabetically by title on the feed page
+    feed_links.sort(key=lambda x: x[1].lower())
+
     ## Only tested this on Pocket-Casts. I'm sure AI wouldn't lie to me about the others
     for feed_id, title in feed_links:
         html_content.append(f"        <li>")
