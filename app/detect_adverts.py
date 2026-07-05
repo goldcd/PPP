@@ -557,17 +557,54 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
         if after_segment else "the end of the episode"
     )
 
+    # Include actual transcript text from the tail of the before-segment and
+    # the head of the after-segment, so the LLM can see the sponsor framing
+    # (e.g. "Lloyds asked about 1990s entertainment" → gap → "Lloyds CTA")
+    CONTEXT_BLOCKS = 8  # how many blocks to pull from each side
+    def _get_tail_text(seg, n):
+        if not seg or not all_blocks_map:
+            return ""
+        idxs = list(range(max(seg['start_idx'], seg['end_idx'] - n + 1), seg['end_idx'] + 1))
+        lines = [f"[{i}] {all_blocks_map[i]['text']}" for i in idxs if i in all_blocks_map]
+        return " ".join(lines)
+
+    def _get_head_text(seg, n):
+        if not seg or not all_blocks_map:
+            return ""
+        idxs = list(range(seg['start_idx'], min(seg['start_idx'] + n, seg['end_idx'] + 1)))
+        lines = [f"[{i}] {all_blocks_map[i]['text']}" for i in idxs if i in all_blocks_map]
+        return " ".join(lines)
+
+    before_tail = _get_tail_text(before_segment, CONTEXT_BLOCKS)
+    after_head  = _get_head_text(after_segment, CONTEXT_BLOCKS)
+
+    # Check if both surrounding segments are the same ad type — strong signal
+    # that the gap is part of the same sponsored conversation
+    same_sponsor_hint = ""
+    if (before_segment and after_segment and
+            before_segment['category'] in ('sponsor_read', 'podcast_promotion') and
+            after_segment['category'] in ('sponsor_read', 'podcast_promotion')):
+        same_sponsor_hint = (
+            "NOTE: Both surrounding segments are classified as advertisements. "
+            "This region may be a 'sponsored conversation' — a passage where the host discusses "
+            "a topic that was explicitly prompted or framed by the surrounding sponsor. "
+            "If the before-segment text introduces a topic (e.g. 'What were your 1990s entertainment memories?') "
+            "and the after-segment text closes it (e.g. a CTA or disclaimer for the same brand), "
+            "this region should be classified as 'sponsor_read' even if the content itself sounds "
+            "like ordinary show discussion.\n\n"
+        )
+
     sys_msg = (
         "You are a precise podcast content classifier performing a targeted review.\n"
         "You will be given a small set of transcript blocks that were uncertain or sit between two known segments.\n"
         "Your job is to classify each block as accurately as possible given the full context provided.\n\n"
         f"CONTEXT: The blocks immediately BEFORE this region are {before_desc}.\n"
-        f"CONTEXT: The blocks immediately AFTER this region are {after_desc}.\n\n"
-        "IMPORTANT: A sponsor_read may include a 'sponsored conversation' where hosts discuss a topic "
-        "prompted by a sponsor (e.g. 'What are your memories of the 1990s?'). "
-        "If this region sits between a sponsor opener and a sponsor CTA/disclaimer, "
-        "treat the entire region as part of the same sponsor_read even if it sounds like natural conversation.\n\n"
-        "Category Definitions:\n"
+        + (f"  Tail of before-segment: \"{before_tail}\"\n" if before_tail else "")
+        + f"CONTEXT: The blocks immediately AFTER this region are {after_desc}.\n"
+        + (f"  Head of after-segment: \"{after_head}\"\n" if after_head else "")
+        + "\n"
+        + same_sponsor_hint
+        + "Category Definitions:\n"
         "- 'show_content': Primary show conversation, unrelated to any advertisement.\n"
         "- 'sponsor_read': Part of a commercial pitch for an external company, product, service, or charity.\n"
         "- 'self_promotion': Promotion of the podcast itself or its hosts.\n"
@@ -586,6 +623,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
 
     user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nClassify in JSON."
 
+
     try:
         r = requests.post(
             url,
@@ -596,10 +634,10 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
                     {"role": "user", "content": user_msg},
                 ],
                 "stream": True,
-                "think": False,
+                "think": True,  # Option A: enable CoT reasoning on the hard cases
                 "options": {
                     "temperature": 0.0,
-                    "num_ctx": 4096,
+                    "num_ctx": 8192,  # more room for reasoning tokens
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
             },
@@ -818,45 +856,93 @@ def detect_adverts(srt_file, raw_folder):
 
     print(f"Topic mapping complete. Total distinct segments after reconciling overlaps: {len(clean_topics)}")
 
-    # --- SECOND PASS: Targeted review of uncertain segments and suspicious gaps ---
+    # --- SECOND PASS: Reviewing Uncertain Segments & Gaps ---
     print("\n--- Second Pass: Reviewing Uncertain Segments & Gaps ---")
     blocks_map = {b['idx']: b for b in blocks}
     
-    # Collect candidates for second-pass review:
-    # 1. Any segment explicitly marked 'uncertain' or 'likely'
-    # 2. show_content segments of <= 60 blocks that sit between two ad-type segments
-    #    (threshold raised to 60 to catch long sponsored conversations, e.g. Lloyds 1990s chat)
-    # 3. self_promotion segments immediately adjacent to a sponsor_read
-    #    (catches cases where context-priming caused Lloyds-style ads to be misclassified)
+    # Collect candidates for second-pass review using run-based detection:
+    # 1. Any segment explicitly marked 'uncertain' or 'likely' (confidence check)
+    # 2. Contiguous runs of non-ad segments whose TOTAL span is <= 60 blocks and are
+    #    bordered by ad segments on BOTH sides — catches multi-segment gaps like the
+    #    Lloyds 1990s conversation that gets split across two clean_topics entries
+    # 3. self_promotion segments immediately adjacent to a sponsor_read on either side
+    #    (catches context-priming misclassifications)
     AD_CATEGORIES = {'sponsor_read', 'podcast_promotion'}
-    review_candidates = []  # list of (segment_index, reason)
-    
-    for i, seg in enumerate(clean_topics):
+    NON_AD_CATEGORIES = {'show_content', 'self_promotion', 'intro_outro'}
+    SECOND_PASS_GAP_THRESHOLD = 60  # blocks
+    review_candidates = []  # tuples: (seg_idx, reason, orig_before_ad, orig_after_ad)
+    added_indices = set()
+    n = len(clean_topics)
+    ci = 0
+
+    while ci < n:
+        seg = clean_topics[ci]
+
+        # --- Confidence-based check: fires BEFORE run-grouping so uncertain
+        #     segments are never silently absorbed into a run ---
         confidence = seg.get('confidence', 'certain')
         if confidence in ('uncertain', 'likely') and seg['category'] not in AD_CATEGORIES:
-            review_candidates.append((i, f"low confidence ({confidence}) on {seg['category']}"))
+            if ci not in added_indices:
+                # No enclosing-ad context for confidence-based candidates
+                review_candidates.append((ci, f"low confidence ({confidence}) on {seg['category']}", None, None))
+                added_indices.add(ci)
+            ci += 1
             continue
-        # Suspicious gap: show_content between two ad segments (up to 60 blocks)
-        if seg['category'] == 'show_content':
-            seg_len = seg['end_idx'] - seg['start_idx'] + 1
-            if seg_len <= 60:
-                before_is_ad = (i > 0 and clean_topics[i-1]['category'] in AD_CATEGORIES)
-                after_is_ad = (i < len(clean_topics)-1 and clean_topics[i+1]['category'] in AD_CATEGORIES)
-                if before_is_ad and after_is_ad:
-                    review_candidates.append((i, f"show_content gap ({seg_len} blocks) between two ad segments"))
-        # self_promotion adjacent to a sponsor_read may be a misclassified ad
-        # (e.g. LLM context-primed to continue self_promotion when a new sponsor started)
-        if seg['category'] == 'self_promotion':
-            before_is_ad = (i > 0 and clean_topics[i-1]['category'] in AD_CATEGORIES)
-            after_is_ad = (i < len(clean_topics)-1 and clean_topics[i+1]['category'] in AD_CATEGORIES)
-            if before_is_ad or after_is_ad:
-                review_candidates.append((i, f"self_promotion adjacent to sponsor_read (possible misclassification)"))
+
+        # --- Run-based gap detection ---
+        if seg['category'] in NON_AD_CATEGORIES:
+            run_start = ci
+            run_end = ci
+            # Extend the run, but stop at uncertain/likely segments
+            while run_end + 1 < n and clean_topics[run_end + 1]['category'] in NON_AD_CATEGORIES:
+                next_conf = clean_topics[run_end + 1].get('confidence', 'certain')
+                if next_conf in ('uncertain', 'likely'):
+                    break
+                run_end += 1
+
+            before_is_ad = (run_start > 0 and clean_topics[run_start - 1]['category'] in AD_CATEGORIES)
+            after_is_ad  = (run_end < n - 1 and clean_topics[run_end + 1]['category'] in AD_CATEGORIES)
+
+            if before_is_ad and after_is_ad:
+                # Entire run is sandwiched between two ad segments.
+                # Capture the enclosing ad segments NOW, before reverse-order processing
+                # can corrupt the clean_topics neighbours.
+                enclosing_before = clean_topics[run_start - 1]
+                enclosing_after  = clean_topics[run_end + 1]
+                run_block_start = clean_topics[run_start]['start_idx']
+                run_block_end   = clean_topics[run_end]['end_idx']
+                total_run_len   = run_block_end - run_block_start + 1
+                if total_run_len <= SECOND_PASS_GAP_THRESHOLD:
+                    for k in range(run_start, run_end + 1):
+                        if k not in added_indices:
+                            review_candidates.append((k, f"part of {total_run_len}-block run between two ad segments",
+                                                      enclosing_before, enclosing_after))
+                            added_indices.add(k)
+            else:
+                # Not sandwiched — scan individually for self_promotion adjacent to one ad
+                for k in range(run_start, run_end + 1):
+                    s = clean_topics[k]
+                    if s['category'] == 'self_promotion' and k not in added_indices:
+                        s_before_ad = (k > 0 and clean_topics[k-1]['category'] in AD_CATEGORIES)
+                        s_after_ad  = (k < n-1 and clean_topics[k+1]['category'] in AD_CATEGORIES)
+                        if s_before_ad or s_after_ad:
+                            adj_before = clean_topics[k-1] if k > 0 else None
+                            adj_after  = clean_topics[k+1] if k < n-1 else None
+                            review_candidates.append((k, "self_promotion adjacent to sponsor_read (possible misclassification)",
+                                                      adj_before if s_before_ad else None,
+                                                      adj_after  if s_after_ad  else None))
+                            added_indices.add(k)
+
+            ci = run_end + 1
+            continue
+
+        ci += 1
 
     if review_candidates:
         print(f"  Found {len(review_candidates)} candidate(s) for second-pass review.")
         # Process each candidate — apply replacements back to clean_topics
         # Work in reverse order so indices stay valid after splicing
-        for seg_idx, reason in sorted(review_candidates, key=lambda x: x[0], reverse=True):
+        for seg_idx, reason, orig_before_ad, orig_after_ad in sorted(review_candidates, key=lambda x: x[0], reverse=True):
             seg = clean_topics[seg_idx]
             print(f"  Reviewing blocks {seg['start_idx']}–{seg['end_idx']} ({reason})...")
             
@@ -865,6 +951,7 @@ def detect_adverts(srt_file, raw_folder):
             if not review_blks:
                 continue
 
+            # Use current clean_topics neighbours for the LLM context prompt
             before_seg = clean_topics[seg_idx - 1] if seg_idx > 0 else None
             after_seg  = clean_topics[seg_idx + 1] if seg_idx < len(clean_topics) - 1 else None
 
@@ -873,12 +960,44 @@ def detect_adverts(srt_file, raw_folder):
                 review_blks, before_seg, after_seg, blocks_map
             )
             if updated:
+                # --- Option B: Timestamp duration override ---
+                # Use orig_before_ad / orig_after_ad (captured at collection time) so that
+                # reverse-order processing of multi-segment runs doesn't corrupt the check.
+                # Fires when the LLM returns show_content but the total wall-clock duration
+                # of the whole break (orig_before_ad → orig_after_ad) is <= 5 min AND the
+                # gap itself is <= 3 min — consistent with a single sponsored conversation.
+                if orig_before_ad and orig_after_ad and orig_before_ad['category'] in AD_CATEGORIES:
+                    AD_BREAK_MAX_SECS    = 5 * 60  # 5 min max for a single ad break
+                    GAP_CONTENT_MAX_SECS = 3 * 60  # 3 min max for the conversation portion
+                    gap_start_blk    = seg['start_idx']
+                    gap_end_blk      = seg['end_idx']
+                    before_start_blk = orig_before_ad['start_idx']
+                    after_end_blk    = orig_after_ad['end_idx']
+                    t0  = blocks_map.get(before_start_blk, {}).get('start_time', None)
+                    t1  = blocks_map.get(after_end_blk,    {}).get('end_time',   None)
+                    tg0 = blocks_map.get(gap_start_blk,    {}).get('start_time', None)
+                    tg1 = blocks_map.get(gap_end_blk,      {}).get('end_time',   None)
+                    if t0 is not None and t1 is not None and tg0 is not None and tg1 is not None:
+                        total_break_secs = t1 - t0
+                        gap_secs         = tg1 - tg0
+                        all_show = all(u['category'] not in AD_CATEGORIES for u in updated)
+                        if all_show and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
+                            print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
+                            updated = [{
+                                'start_idx':  gap_start_blk,
+                                'end_idx':    gap_end_blk,
+                                'category':   'sponsor_read',
+                                'title':      'Sponsored Conversation (timestamp override)',
+                                'confidence': 'likely',
+                                'is_flagged': True,
+                            }]
                 # Splice the updated segments in place of the old one
                 clean_topics = clean_topics[:seg_idx] + updated + clean_topics[seg_idx+1:]
                 print(f"    -> Replaced with {len(updated)} segment(s): " +
                       ", ".join(f"{u['category']}({u['start_idx']}-{u['end_idx']})" for u in updated))
             else:
                 print(f"    -> No change (second pass failed or agreed with first pass).")
+
     else:
         print("  No candidates flagged for second-pass review. First pass looks clean.")
 
