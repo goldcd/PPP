@@ -4,11 +4,32 @@ import time
 import requests
 import json
 from collections import Counter
+from datetime import datetime
 
 if sys.version_info >= (3, 11):
     import tomllib as toml
 else:
     import tomli as toml
+
+
+class _Tee:
+    """Mirrors all writes to sys.stdout into a log file simultaneously."""
+    def __init__(self, log_path):
+        self._stdout = sys.stdout
+        self._file = open(log_path, "w", encoding="utf-8", buffering=1)
+        sys.stdout = self
+
+    def write(self, data):
+        self._stdout.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._stdout.flush()
+        self._file.flush()
+
+    def close(self):
+        sys.stdout = self._stdout
+        self._file.close()
 
 """
 
@@ -41,6 +62,13 @@ model_to_use = None
 
 def detect_all_adverts():
     print("Detecting adverts")
+
+    # Start logging — mirror all stdout to a timestamped file under logs/
+    os.makedirs("logs", exist_ok=True)
+    log_filename = datetime.now().strftime("detect_adverts_%Y%m%d_%H%M%S.log")
+    log_path = os.path.join("logs", log_filename)
+    tee = _Tee(log_path)
+    print(f"Logging to {log_path}")
 
     # If the data path doesn't exist, then tell the user they need to add some podcasts
     if not os.path.exists("data"):
@@ -81,8 +109,11 @@ def detect_all_adverts():
         print("\nStopping Ollama LLM Engine\n")
         ##Then stop the ollama engine. It's on a timeout, and gets kicked from memory if you load something else - so if we quit out/crash, this will leave eventually by itself.
         stop_ollama()
+        tee.close()
+        print(f"Log saved to {log_path}")
     else:
         print("No unprocessed .srt files found")
+        tee.close()
         return
 
 ##Function to determine which ollama model to use and load it up
@@ -896,7 +927,12 @@ def detect_adverts(srt_file, raw_folder):
                         gap_secs         = tg1 - tg0
                         all_show = all(u['category'] not in AD_CATEGORIES for u in updated)
                         has_intro_outro = any(u['category'] == 'intro_outro' for u in updated)
-                        if all_show and not has_intro_outro and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
+                        # Intro-adjacency guard: if the gap immediately follows an intro_outro
+                        # segment (as classified by the LLM), it cannot be a sponsored
+                        # conversation — it is the show opening. No podcast places a sponsored
+                        # conversation immediately after its formal greeting.
+                        gap_follows_intro = (before_seg is not None and before_seg['category'] == 'intro_outro')
+                        if all_show and not has_intro_outro and not gap_follows_intro and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
                             print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
                             updated = [{
                                 'start_idx':  gap_start_blk,
