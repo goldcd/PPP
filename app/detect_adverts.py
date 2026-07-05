@@ -228,100 +228,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
     ##Also Qwen is a champion. Second time I've come back to her. My eye should never have wandered..
     ##NOTE TO SELF - I think I should let people choose what topics they want taking out of the podcast. Should also split between self-promotion and podcast-promotion
     
-    ##Old version of the prompt, whilst I make big changes below
-    """
-    sys_msg = (
-        "You are a podcast content segmenter and topic mapper.\n"
-        "Your task is to analyze this segment of the transcript and partition it chronologically into distinct topics or segments covered in the show.\n"
-        f"CRITICAL INSTRUCTION: Every single block from {min_idx} to {max_idx} MUST be included in a topic.\n"
-        "CRITICAL INSTRUCTION: The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
-        "CRITICAL INSTRUCTION: Break the transcript into distinct topics based on natural conversation shifts.\n"
-        "CRITICAL INSTRUCTION: Carefully identify any advertisements or sponsor reads. They are usually short (2-15 blocks) and MUST be placed in their own isolated 'sponsor_read' topics.\n"
-        "CRITICAL INSTRUCTION: Ensure your topic lengths vary naturally according to the conversation (e.g. one topic might be 3 blocks long, another might be 45 blocks long).\n\n"
-        "For each topic, identify:\n"
-        "1. Short title\n"
-        "2. Start block index and end block index (inclusive)\n"
-        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.\n\n"
-        "Category Definitions:\n"
-        "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
-        "- 'sponsor_read': Commercial pitches for external companies/products/services (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.) and any other kind of commercial or sponsorship promotion. Classify ALL obvious advertisements as sponsor_read!\n"
-        "- 'podcast_promotion': Promos/trailers/credits for other podcasts, channels, or shows (e.g. cross-promotions like 'Creator Destroy').\n"
-        "- 'self_promotion': Promotion of the current podcast (e.g. live shows, patreon, paid ad-free versions of this podcast, merchandise etc).\n"
-        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n\n"
-        "You MUST return ONLY a valid JSON object matching the structure below. This is an example of variable-length chunking:\n"
-        "{\n"
-        "  \"analysis\": \"I will first summarize the entire text from start to finish. I see an intro from blocks X-Y, a sponsor read for Brand Z from blocks A-B, and then main content...\",\n"
-        "  \"topics\": [\n"
-        "    {\n"
-        "      \"title\": \"Example Intro\",\n"
-        f"      \"start_idx\": {min_idx},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 3)},\n"
-        "      \"category\": \"intro_outro\"\n"
-        "    },\n"
-        "    {\n"
-        "      \"title\": \"Example Sponsor\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 4)},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 11)},\n"
-        "      \"category\": \"sponsor_read\"\n"
-        "    },\n"
-        "    {\n"
-        "      \"title\": \"Example Main Segment\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 12)},\n"
-        f"      \"end_idx\": {max_idx},\n"
-        "      \"category\": \"show_content\"\n"
-        "    }\n"
-        "  ]\n"
-        "}"
-    )
-    
-    sys_msg = (
-        "You are a podcast content segmenter and topic mapper.\n"
-        "Your task is to fully and carefully analyse this provided segment of the show and then partition it chronologically into distinct topics or segments.\n"
-        f"CRITICAL INSTRUCTION: Every single provided block from {min_idx} to {max_idx} MUST be included in a topic.\n"
-        "CRITICAL INSTRUCTION: The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
-        "CRITICAL INSTRUCTION: Break the transcript into distinct topics based on natural conversation shifts.\n"
-        "CRITICAL INSTRUCTION: Especially identify any promotional content. They are usually short (2-15 blocks) and MUST be placed in their own isolated topics.\n"
-        "CRITICAL INSTRUCTION: The precise boundaries of the blocks are critical. Once you think you've identified a boundary, look on both preceeding and following blocks again to confirm you are exactly right. Do not make snap decisions. \n"
-        "CRITICAL INSTRUCTION: Hosts will often signpost a break in the show with phrases like 'let's take a short break', 'a message from our sponsor', 'we'll be right back', or 'after the break'.\n"
-        "NOTE: A break can lead into a 'sponsor_read', a 'podcast_promotion', OR a 'self_promotion'. Do not assume all breaks are sponsor reads. Look carefully at what is being promoted.\n"
-        "Often multiple promotions are placed back-to-back to create an advertising block. Identify all of these and categorize them appropriately.\n"
-        "Hosts will often signpost the end of a break and a return to regular show content with phrases like 'Welcome back' or 'back to the show'.\n" 
-        "For each topic, identify:\n"
-        "1. Short title\n"
-        "2. Start block index and end block index (inclusive)\n"
-        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.\n\n"
-        "Category Definitions:\n"
-        "- 'show_content': Primary show conversation, stories, news, interviews, or banter.\n"
-        "- 'sponsor_read': Commercial pitches/advertisements for EXTERNAL companies/products/services/charities (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.). Classify ALL obvious advertisements for 3rd parties as sponsor_read. N.B. Discussion of a generic item is not necessarily an advert - it must refer to a specific brand name/company.\n"
-        "- 'podcast_promotion': Promos/trailers/credits for OTHER podcasts, channels, or shows. Similar to sponsor_reads/adverts, but for other shows or content creators. Keep these distinct from sponsor_reads.\n"
-        "- 'self_promotion': Promotion of THIS podcast or its hosts (e.g. live shows, festivals, tours, patreon, paid ad-free versions, merchandise, appearances). Even if it mentions tickets or websites, if it's about seeing the hosts/podcast live, it is self_promotion.\n"
-        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.\n\n"
-        "You MUST return ONLY a valid JSON object matching the structure below. This is an example of variable-length chunking:\n"
-        "{\n"
-        "  \"analysis\": \"I will first summarize the entire text from start to finish. I see an intro from blocks X-Y, a sponsor read for Brand Z from blocks A-B, and then main content...\",\n"
-        "  \"topics\": [\n"
-        "    {\n"
-        "      \"title\": \"Example Intro\",\n"
-        f"      \"start_idx\": {min_idx},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 3)},\n"
-        "      \"category\": \"intro_outro\"\n"
-        "    },\n"
-        "    {\n"
-        "      \"title\": \"Example Sponsor\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 4)},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 11)},\n"
-        "      \"category\": \"sponsor_read\"\n"
-        "    },\n"
-        "    {\n"
-        "      \"title\": \"Example Main Segment\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 12)},\n"
-        f"      \"end_idx\": {max_idx},\n"
-        "      \"category\": \"show_content\"\n"
-        "    }\n"
-        "  ]\n"
-        "}"
-    )
-"""    
+
     sys_msg = (
         "You are a podcast content segmenter and topic mapper.\n"
         "Your purpose is to fully and carefully analyse this provided segment of the show and then partition it chronologically into distinct topics or segments. This information will be used to produce an edited version of the podcasts with selected items removed.\n"
@@ -582,10 +489,10 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
     # that the gap is part of the same sponsored conversation
     same_sponsor_hint = ""
     if (before_segment and after_segment and
-            before_segment['category'] in ('sponsor_read', 'podcast_promotion') and
-            after_segment['category'] in ('sponsor_read', 'podcast_promotion')):
+            before_segment['category'] == 'sponsor_read' and
+            after_segment['category'] == 'sponsor_read'):
         same_sponsor_hint = (
-            "NOTE: Both surrounding segments are classified as advertisements. "
+            "NOTE: Both surrounding segments are sponsor reads. "
             "This region may be a 'sponsored conversation' — a passage where the host discusses "
             "a topic that was explicitly prompted or framed by the surrounding sponsor. "
             "If the before-segment text introduces a topic (e.g. 'What were your 1990s entertainment memories?') "
@@ -867,8 +774,15 @@ def detect_adverts(srt_file, raw_folder):
     #    Lloyds 1990s conversation that gets split across two clean_topics entries
     # 3. self_promotion segments immediately adjacent to a sponsor_read on either side
     #    (catches context-priming misclassifications)
-    AD_CATEGORIES = {'sponsor_read', 'podcast_promotion'}
-    NON_AD_CATEGORIES = {'show_content', 'self_promotion', 'intro_outro'}
+    # AD_CATEGORIES: all categories the user has flagged for removal (from config).
+    # Used for: flagging segments, overall removal decisions.
+    AD_CATEGORIES = {cat for cat, remove in content_to_remove.items() if remove}
+    # ANCHOR_CATEGORIES: the subset of ad categories that can *structurally* anchor the
+    # sandwich/gap detection (i.e., "we are inside a paid ad break").  Only sponsor_read
+    # qualifies — podcast_promotion and self_promotion are self-contained and don't frame
+    # hidden sponsored conversations.
+    ANCHOR_CATEGORIES = AD_CATEGORIES & {'sponsor_read'}
+    NON_AD_CATEGORIES = set(content_to_remove.keys()) - ANCHOR_CATEGORIES
     SECOND_PASS_GAP_THRESHOLD = 60  # blocks
     review_candidates = []  # tuples: (seg_idx, reason, orig_before_ad, orig_after_ad)
     added_indices = set()
@@ -900,8 +814,8 @@ def detect_adverts(srt_file, raw_folder):
                     break
                 run_end += 1
 
-            before_is_ad = (run_start > 0 and clean_topics[run_start - 1]['category'] in AD_CATEGORIES)
-            after_is_ad  = (run_end < n - 1 and clean_topics[run_end + 1]['category'] in AD_CATEGORIES)
+            before_is_ad = (run_start > 0 and clean_topics[run_start - 1]['category'] in ANCHOR_CATEGORIES)
+            after_is_ad  = (run_end < n - 1 and clean_topics[run_end + 1]['category'] in ANCHOR_CATEGORIES)
 
             if before_is_ad and after_is_ad:
                 # Entire run is sandwiched between two ad segments.
@@ -923,8 +837,8 @@ def detect_adverts(srt_file, raw_folder):
                 for k in range(run_start, run_end + 1):
                     s = clean_topics[k]
                     if s['category'] == 'self_promotion' and k not in added_indices:
-                        s_before_ad = (k > 0 and clean_topics[k-1]['category'] in AD_CATEGORIES)
-                        s_after_ad  = (k < n-1 and clean_topics[k+1]['category'] in AD_CATEGORIES)
+                        s_before_ad = (k > 0 and clean_topics[k-1]['category'] in ANCHOR_CATEGORIES)
+                        s_after_ad  = (k < n-1 and clean_topics[k+1]['category'] in ANCHOR_CATEGORIES)
                         if s_before_ad or s_after_ad:
                             adj_before = clean_topics[k-1] if k > 0 else None
                             adj_after  = clean_topics[k+1] if k < n-1 else None
@@ -966,7 +880,7 @@ def detect_adverts(srt_file, raw_folder):
                 # Fires when the LLM returns show_content but the total wall-clock duration
                 # of the whole break (orig_before_ad → orig_after_ad) is <= 5 min AND the
                 # gap itself is <= 3 min — consistent with a single sponsored conversation.
-                if orig_before_ad and orig_after_ad and orig_before_ad['category'] in AD_CATEGORIES:
+                if orig_before_ad and orig_after_ad and orig_before_ad['category'] in ANCHOR_CATEGORIES:
                     AD_BREAK_MAX_SECS    = 5 * 60  # 5 min max for a single ad break
                     GAP_CONTENT_MAX_SECS = 3 * 60  # 3 min max for the conversation portion
                     gap_start_blk    = seg['start_idx']
