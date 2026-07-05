@@ -350,12 +350,13 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
         "- Hosts will often signpost a sponsor_read in the show with phrases like 'let's take a short break', 'a message from our sponsor', 'we'll be right back', or 'after the break'. The end of such a sponsor_read block may be signposted with similar phrases such as 'Welcome back' or 'back to the show'.\n"
         "- Individual sponsor_read items are often 30-60 seconds in duration. However they can be longer or shorter. Do not make assumptions about the duration of the content in blocks.\n"
         "- sponsor_read segments are usually unrelated to the content around them and the themes of the podcast.\n"
-        "- sponsor_read segments sometimes include a short discussion to make them appear more organic. Normally these can be identified by explicit references to the sponsor around the seemingly organic component.\n"
+        "- sponsor_read segments sometimes include a short discussion to make them appear more organic. Include ALL blocks that form part of this organic lead-in WITHIN the sponsor_read — even if the first few blocks sound like casual banter. If the banter is immediately followed by and clearly constructed as a setup for the brand, the entire run (banter + pitch) is one sponsor_read.\n"
         "- sponsor_read sections are self-contained adverts. CHECK the identified block actually matches a self-contained advert. The advert should be entirely in the identified block, the surrounding blocks should be unrelated.\n"
         "- Whilst the categories are related, they are distinct. Carefully consider which ONE every section of the podcast best fits to.\n"
         "- Do not confuse a short mentioning/reference of a company or service in passing to be a sponsor_read.\n"
         "- A genuine sponsor_read is always explicitly promotional (or a PSA/charity appeal): the speaker will be actively describing a product, service, or charity, and directing the listener to take some action (e.g. visit a URL, use a discount code, donate, sign up - 'a call to action'). Be careful not to confuse news bulletins about disasters with charity appeals; if it asks for money or directs to a donation URL, it is a sponsor_read. If the content is purely conversational, factual news, or anecdotal without a call to action, it is show_content.\n"
         "- All the previous rules are guidance. I have no idea what podcasts you'll be asked to process, so please adapt, rather than blindly follow.\n"
+        "- When a self_promotion segment ends and an external advertisement begins immediately after, be precise: the very first block of that advertisement MUST be the start of a new sponsor_read segment, not the end of the self_promotion. These are categorically different segments.\n"
         "- What is mandatory is accurate classification of the sections - mistakes made here cannot be undone later. There's no fallback or workaround.\n\n"
         "CRITICAL PROCESSING:\n"
         "- Once you believe you have categorized all the provided blocks, before returning a result, check you are satisfied with the categorization.\n"
@@ -365,6 +366,8 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
         "CRITICAL OUTPUT INSTRUCTIONS:\n"
         f"- Every single provided block from {min_idx} to {max_idx} MUST be included in a topic.\n"
         "- The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
+        "- Each topic must include a 'confidence' field: 'certain' if you are sure of the classification, 'likely' if you have a strong belief but some doubt, or 'uncertain' if you are genuinely unsure.\n"
+        "- Use 'uncertain' when content could plausibly belong to either the preceding/following ad segment OR be genuine show content — for example, natural-sounding conversation that immediately follows a sponsor opener and precedes a sponsor CTA/disclaimer.\n"
         "- You MUST return ONLY a valid JSON object matching the structure below. This is an example of variable-length chunking:\n"
         "{\n"
         "  \"analysis\": \"I will first summarize the text. Blocks 101 to 119 contain organic banter which acts as a purely conversational setup for an advert for Brand X, so all 19 blocks are a single sponsor_read. Blocks 120 to 136 are a distinct, separate advert for Service Y. Blocks 137 to 151 feature a guest host promoting a new movie release, which is a sponsor_read (NOT intro_outro, despite starting with a 'Hello'). The actual show intro begins at 152 with 'Hello and welcome to this episode', which is intro_outro, leading into the first main conversational topic about a popstar at 157 which is show_content.\",\n"
@@ -373,31 +376,36 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
         "      \"title\": \"Brand X Ad (with organic lead-in)\",\n"
         "      \"start_idx\": 101,\n"
         "      \"end_idx\": 119,\n"
-        "      \"category\": \"sponsor_read\"\n"
+        "      \"category\": \"sponsor_read\",\n"
+        "      \"confidence\": \"certain\"\n"
         "    },\n"
         "    {\n"
         "      \"title\": \"Service Y Ad\",\n"
         "      \"start_idx\": 120,\n"
         "      \"end_idx\": 136,\n"
-        "      \"category\": \"sponsor_read\"\n"
+        "      \"category\": \"sponsor_read\",\n"
+        "      \"confidence\": \"certain\"\n"
         "    },\n"
         "    {\n"
         "      \"title\": \"Movie Promo\",\n"
         "      \"start_idx\": 137,\n"
         "      \"end_idx\": 151,\n"
-        "      \"category\": \"sponsor_read\"\n"
+        "      \"category\": \"sponsor_read\",\n"
+        "      \"confidence\": \"certain\"\n"
         "    },\n"
         "    {\n"
         "      \"title\": \"Show Intro\",\n"
         "      \"start_idx\": 152,\n"
         "      \"end_idx\": 156,\n"
-        "      \"category\": \"intro_outro\"\n"
+        "      \"category\": \"intro_outro\",\n"
+        "      \"confidence\": \"certain\"\n"
         "    },\n"
         "    {\n"
         "      \"title\": \"Main Show Topic 1\",\n"
         "      \"start_idx\": 157,\n"
         "      \"end_idx\": 250,\n"
-        "      \"category\": \"show_content\"\n"
+        "      \"category\": \"show_content\",\n"
+        "      \"confidence\": \"certain\"\n"
         "    }\n"
         "  ]\n"
         "}"
@@ -408,7 +416,9 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
     user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nMap topics in JSON."
     
     try:
-        # Make a POST request to the local LLM API (e.g., Ollama).
+        # Make a streaming POST request to the local LLM API (e.g., Ollama).
+        # Streaming means we receive tokens as they arrive, so the connection never
+        # times out waiting for the full response - it only times out if the model stops responding entirely.
         # Temperature is set to 0.0 for more deterministic and consistent output formatting.
         r = requests.post(
             url,
@@ -418,19 +428,33 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                     {"role": "system", "content": sys_msg},
                     {"role": "user", "content": user_msg},
                 ],
-                "stream": False,
+                "stream": True,
+                "think": False,
                 "options": {
                     "temperature": 0.0,
-                    "num_ctx": 12288
-                },
-                "format": "json"
+                    "num_ctx": 6144,
+                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                }
             },
+            stream=True,
             timeout=300,
         )
         # Process the successful response
         if r.status_code == 200:
-            # Extract the raw content from the response message
-            raw = r.json().get("message", {}).get("content", "").strip()
+            # Accumulate streamed content chunks into a single string
+            raw_parts = []
+            for line in r.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line)
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            raw_parts.append(token)
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        pass
+            raw = "".join(raw_parts).strip()
             
             # Clean up the output in case the LLM wrapped the JSON in markdown code blocks
             if "```json" in raw:
@@ -440,6 +464,10 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                 
             # Parse the cleaned string into a JSON dictionary
             data = json.loads(raw)
+            # Print the LLM's reasoning so we can see if it's going off the rails
+            analysis = data.get("analysis", "")
+            if analysis:
+                print(f"\n  [LLM Analysis] {analysis.strip()}")
             # Retrieve the list of topics from the parsed JSON
             topics = data.get("topics", [])
             
@@ -478,11 +506,15 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                         s_val, e_val = e_val, s_val
                         
                     # Append the sanitized topic data to our cleaned list
+                    confidence = t.get("confidence", "certain")
+                    if confidence not in ("certain", "likely", "uncertain"):
+                        confidence = "certain"
                     cleaned.append({
                         "title": str(title),
                         "start_idx": s_val,
                         "end_idx": e_val,
-                        "category": str(category).lower()
+                        "category": str(category).lower(),
+                        "confidence": confidence
                     })
                 except (ValueError, TypeError):
                     # Ignore and drop any topics where indices couldn't be parsed as integers
@@ -499,6 +531,142 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
     except Exception as e:
         # Handle connection errors or other exceptions during the request
         return None, f"Request Error: {e}"
+
+
+def ask_second_pass_review(url, model, review_blocks, before_segment, after_segment, all_blocks_map):
+    """
+    Second-pass targeted review. Given a small set of 'uncertain' blocks sandwiched
+    between known segments, asks the LLM to re-evaluate with full surrounding context.
+    Returns a list of updated topic dicts, or None on failure.
+    """
+    if not review_blocks:
+        return None
+
+    min_idx = review_blocks[0]['idx']
+    max_idx = review_blocks[-1]['idx']
+    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in review_blocks)
+
+    before_desc = (
+        f"blocks {before_segment['start_idx']}–{before_segment['end_idx']} "
+        f"classified as '{before_segment['category']}' ('{before_segment['title']}')"
+        if before_segment else "the start of the episode"
+    )
+    after_desc = (
+        f"blocks {after_segment['start_idx']}–{after_segment['end_idx']} "
+        f"classified as '{after_segment['category']}' ('{after_segment['title']}')"
+        if after_segment else "the end of the episode"
+    )
+
+    sys_msg = (
+        "You are a precise podcast content classifier performing a targeted review.\n"
+        "You will be given a small set of transcript blocks that were uncertain or sit between two known segments.\n"
+        "Your job is to classify each block as accurately as possible given the full context provided.\n\n"
+        f"CONTEXT: The blocks immediately BEFORE this region are {before_desc}.\n"
+        f"CONTEXT: The blocks immediately AFTER this region are {after_desc}.\n\n"
+        "IMPORTANT: A sponsor_read may include a 'sponsored conversation' where hosts discuss a topic "
+        "prompted by a sponsor (e.g. 'What are your memories of the 1990s?'). "
+        "If this region sits between a sponsor opener and a sponsor CTA/disclaimer, "
+        "treat the entire region as part of the same sponsor_read even if it sounds like natural conversation.\n\n"
+        "Category Definitions:\n"
+        "- 'show_content': Primary show conversation, unrelated to any advertisement.\n"
+        "- 'sponsor_read': Part of a commercial pitch for an external company, product, service, or charity.\n"
+        "- 'self_promotion': Promotion of the podcast itself or its hosts.\n"
+        "- 'podcast_promotion': Promo for another podcast or audio show.\n"
+        "- 'intro_outro': Standard show intro or outro.\n\n"
+        "CRITICAL OUTPUT INSTRUCTIONS:\n"
+        f"- Classify ALL blocks from {min_idx} to {max_idx}. They must be contiguous with no gaps.\n"
+        "- You MUST return ONLY a valid JSON object with this structure:\n"
+        "{\n"
+        "  \"analysis\": \"Brief explanation of your decision.\",\n"
+        "  \"topics\": [\n"
+        "    { \"title\": \"Segment name\", \"start_idx\": N, \"end_idx\": M, \"category\": \"...\", \"confidence\": \"certain\" }\n"
+        "  ]\n"
+        "}"
+    )
+
+    user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nClassify in JSON."
+
+    try:
+        r = requests.post(
+            url,
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                "stream": True,
+                "think": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_ctx": 4096,
+                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                }
+            },
+            stream=True,
+            timeout=180,
+        )
+        if r.status_code != 200:
+            return None
+
+        raw_parts = []
+        for line in r.iter_lines():
+            if line:
+                try:
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        raw_parts.append(token)
+                    if chunk.get("done", False):
+                        break
+                except json.JSONDecodeError:
+                    pass
+
+        raw = "".join(raw_parts).strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+
+        data = json.loads(raw)
+        analysis = data.get("analysis", "")
+        if analysis:
+            print(f"      [2nd Pass] {analysis.strip()[:200]}")
+
+        topics = data.get("topics", [])
+        cleaned = []
+        for t in topics:
+            if not isinstance(t, dict):
+                continue
+            s_idx = t.get("start_idx") or t.get("start_index") or t.get("start")
+            e_idx = t.get("end_idx") or t.get("end_index") or t.get("end")
+            if s_idx is None or e_idx is None:
+                continue
+            try:
+                s_val = max(min_idx, min(max_idx, int(s_idx)))
+                e_val = max(min_idx, min(max_idx, int(e_idx)))
+                if s_val > e_val:
+                    s_val, e_val = e_val, s_val
+                confidence = t.get("confidence", "certain")
+                if confidence not in ("certain", "likely", "uncertain"):
+                    confidence = "certain"
+                cleaned.append({
+                    "title": str(t.get("title", "Reviewed Segment")),
+                    "start_idx": s_val,
+                    "end_idx": e_val,
+                    "category": str(t.get("category", "show_content")).lower(),
+                    "confidence": confidence
+                })
+            except (ValueError, TypeError):
+                pass
+
+        if cleaned:
+            cleaned = auto_heal_gaps(cleaned, min_idx, max_idx)
+        return cleaned if cleaned else None
+
+    except Exception as e:
+        print(f"      [2nd Pass Error] {e}")
+        return None
 
 
 ## Top level function to call, to detect adverts (and now other stuff), in a single SRT file
@@ -583,7 +751,10 @@ def detect_adverts(srt_file, raw_folder):
                 # If the chunk ended on plain show_content, passing that context forward
                 # just primes the next chunk to also expect show_content, causing laziness.
                 # Context is only valuable when an advert or special segment may spill over.
-                if last_topic['category'] != 'show_content':
+                # We do NOT pass self_promotion context forward: self_promotions are typically
+                # short and self-contained. Passing them forward causes the LLM to misclassify
+                # the opening blocks of the next chunk (e.g. a Lloyds ad) as continued self_promotion.
+                if last_topic['category'] in ('sponsor_read', 'podcast_promotion', 'intro_outro'):
                     previous_context = f"The previous chunk ended with a topic titled '{last_topic['title']}' categorized as '{last_topic['category']}' which ended at block {last_topic['end_idx']}. Use this context to determine if the first few blocks of this current chunk continue that topic or start a new one."
                 else:
                     previous_context = None
@@ -646,7 +817,78 @@ def detect_adverts(srt_file, raw_folder):
         })
 
     print(f"Topic mapping complete. Total distinct segments after reconciling overlaps: {len(clean_topics)}")
+
+    # --- SECOND PASS: Targeted review of uncertain segments and suspicious gaps ---
+    print("\n--- Second Pass: Reviewing Uncertain Segments & Gaps ---")
+    blocks_map = {b['idx']: b for b in blocks}
     
+    # Collect candidates for second-pass review:
+    # 1. Any segment explicitly marked 'uncertain' or 'likely'
+    # 2. show_content segments of <= 60 blocks that sit between two ad-type segments
+    #    (threshold raised to 60 to catch long sponsored conversations, e.g. Lloyds 1990s chat)
+    # 3. self_promotion segments immediately adjacent to a sponsor_read
+    #    (catches cases where context-priming caused Lloyds-style ads to be misclassified)
+    AD_CATEGORIES = {'sponsor_read', 'podcast_promotion'}
+    review_candidates = []  # list of (segment_index, reason)
+    
+    for i, seg in enumerate(clean_topics):
+        confidence = seg.get('confidence', 'certain')
+        if confidence in ('uncertain', 'likely') and seg['category'] not in AD_CATEGORIES:
+            review_candidates.append((i, f"low confidence ({confidence}) on {seg['category']}"))
+            continue
+        # Suspicious gap: show_content between two ad segments (up to 60 blocks)
+        if seg['category'] == 'show_content':
+            seg_len = seg['end_idx'] - seg['start_idx'] + 1
+            if seg_len <= 60:
+                before_is_ad = (i > 0 and clean_topics[i-1]['category'] in AD_CATEGORIES)
+                after_is_ad = (i < len(clean_topics)-1 and clean_topics[i+1]['category'] in AD_CATEGORIES)
+                if before_is_ad and after_is_ad:
+                    review_candidates.append((i, f"show_content gap ({seg_len} blocks) between two ad segments"))
+        # self_promotion adjacent to a sponsor_read may be a misclassified ad
+        # (e.g. LLM context-primed to continue self_promotion when a new sponsor started)
+        if seg['category'] == 'self_promotion':
+            before_is_ad = (i > 0 and clean_topics[i-1]['category'] in AD_CATEGORIES)
+            after_is_ad = (i < len(clean_topics)-1 and clean_topics[i+1]['category'] in AD_CATEGORIES)
+            if before_is_ad or after_is_ad:
+                review_candidates.append((i, f"self_promotion adjacent to sponsor_read (possible misclassification)"))
+
+    if review_candidates:
+        print(f"  Found {len(review_candidates)} candidate(s) for second-pass review.")
+        # Process each candidate — apply replacements back to clean_topics
+        # Work in reverse order so indices stay valid after splicing
+        for seg_idx, reason in sorted(review_candidates, key=lambda x: x[0], reverse=True):
+            seg = clean_topics[seg_idx]
+            print(f"  Reviewing blocks {seg['start_idx']}–{seg['end_idx']} ({reason})...")
+            
+            # Collect the actual block dicts for this segment
+            review_blks = [blocks_map[i] for i in range(seg['start_idx'], seg['end_idx']+1) if i in blocks_map]
+            if not review_blks:
+                continue
+
+            before_seg = clean_topics[seg_idx - 1] if seg_idx > 0 else None
+            after_seg  = clean_topics[seg_idx + 1] if seg_idx < len(clean_topics) - 1 else None
+
+            updated = ask_second_pass_review(
+                ollama_url, model_to_use,
+                review_blks, before_seg, after_seg, blocks_map
+            )
+            if updated:
+                # Splice the updated segments in place of the old one
+                clean_topics = clean_topics[:seg_idx] + updated + clean_topics[seg_idx+1:]
+                print(f"    -> Replaced with {len(updated)} segment(s): " +
+                      ", ".join(f"{u['category']}({u['start_idx']}-{u['end_idx']})" for u in updated))
+            else:
+                print(f"    -> No change (second pass failed or agreed with first pass).")
+    else:
+        print("  No candidates flagged for second-pass review. First pass looks clean.")
+
+    # Rebuild flagged_indices from (potentially updated) clean_topics
+    # Re-evaluate is_flagged for any topics that may have changed category
+    for seg in clean_topics:
+        seg['is_flagged'] = content_to_remove.get(seg['category'], False)
+
+    print(f"\nFinal segment count after second pass: {len(clean_topics)}")
+
     # --- PRINT TOPIC MAP TABLE ---
     print("\n--- GENERATED TOPIC MAP ---")
     print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Title'}")
@@ -657,9 +899,11 @@ def detect_adverts(srt_file, raw_folder):
     for t in clean_topics:
         duration = t["end_idx"] - t["start_idx"] + 1
         is_flagged = t["is_flagged"]
+        confidence = t.get("confidence", "certain")
         
         flagged_str = "[FLAGGED]" if is_flagged else "       "
-        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {t['title']} {flagged_str}")
+        conf_str = f"[{confidence.upper()[:3]}]" if confidence != "certain" else "     "
+        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {conf_str} {t['title']} {flagged_str}")
         
         if is_flagged:
             for idx in range(t["start_idx"], t["end_idx"] + 1):
