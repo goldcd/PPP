@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import torch
 import requests
 import json
 from collections import Counter
@@ -99,6 +98,7 @@ def start_ollama():
     ollama_url = ollama_config.get("ollama_url", "http://localhost:11434/api/chat")
     
     force_cpu = config.get("processing", {}).get("force_cpu", False)
+    import torch
     if torch.cuda.is_available() and not force_cpu:
         model_to_use = ollama_config.get("gpu_model", "qwen3:14b")
         print(f"\n Using GPU model '{model_to_use}' for advert detection \n")
@@ -895,7 +895,8 @@ def detect_adverts(srt_file, raw_folder):
                         total_break_secs = t1 - t0
                         gap_secs         = tg1 - tg0
                         all_show = all(u['category'] not in AD_CATEGORIES for u in updated)
-                        if all_show and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
+                        has_intro_outro = any(u['category'] == 'intro_outro' for u in updated)
+                        if all_show and not has_intro_outro and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
                             print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
                             updated = [{
                                 'start_idx':  gap_start_blk,
