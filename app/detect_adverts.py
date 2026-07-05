@@ -421,7 +421,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                 "stream": False,
                 "options": {
                     "temperature": 0.0,
-                    "num_ctx": 4096
+                    "num_ctx": 12288
                 },
                 "format": "json"
             },
@@ -579,7 +579,14 @@ def detect_adverts(srt_file, raw_folder):
             all_topics.extend(found)
             if len(found) > 0:
                 last_topic = found[-1]
-                previous_context = f"The previous chunk ended with a topic titled '{last_topic['title']}' categorized as '{last_topic['category']}' which ended at block {last_topic['end_idx']}. Use this context to determine if the first few blocks of this current chunk continue that topic or start a new one."
+                # Only pass context forward when it's at an interesting boundary.
+                # If the chunk ended on plain show_content, passing that context forward
+                # just primes the next chunk to also expect show_content, causing laziness.
+                # Context is only valuable when an advert or special segment may spill over.
+                if last_topic['category'] != 'show_content':
+                    previous_context = f"The previous chunk ended with a topic titled '{last_topic['title']}' categorized as '{last_topic['category']}' which ended at block {last_topic['end_idx']}. Use this context to determine if the first few blocks of this current chunk continue that topic or start a new one."
+                else:
+                    previous_context = None
             else:
                 previous_context = None
         else:
