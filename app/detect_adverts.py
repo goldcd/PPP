@@ -187,9 +187,35 @@ def parse_srt_blocks(raw_blocks):
                 pass
     return blocks
 
+def auto_heal_gaps(cleaned_topics, min_idx, max_idx):
+    if not cleaned_topics:
+        return cleaned_topics
+        
+    # Sort topics by start index just in case LLM returned them out of order
+    cleaned_topics.sort(key=lambda x: x['start_idx'])
+    
+    # 1. Ensure the first topic starts at min_idx
+    if cleaned_topics[0]['start_idx'] > min_idx:
+        cleaned_topics[0]['start_idx'] = min_idx
+        
+    # 2. Heal any gaps between consecutive topics
+    for i in range(len(cleaned_topics) - 1):
+        current_end = cleaned_topics[i]['end_idx']
+        next_start = cleaned_topics[i+1]['start_idx']
+        
+        if current_end < next_start - 1:
+            # Expand the current topic's end_idx to close the gap
+            cleaned_topics[i]['end_idx'] = next_start - 1
+            
+    # 3. Ensure the last topic ends at max_idx
+    if cleaned_topics[-1]['end_idx'] < max_idx:
+        cleaned_topics[-1]['end_idx'] = max_idx
+        
+    return cleaned_topics
+
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
-def ask_phase1_topics(url, model, blocks_subset):
+def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
     ##Determine the start and end index of the blocks we're passing in
     valid_indices = {b['idx'] for b in blocks_subset}
     ##Get the min and max of this set of indices
@@ -305,50 +331,72 @@ def ask_phase1_topics(url, model, blocks_subset):
         "For each topic, identify:\n"
         "1. Short title\n"
         "2. Start block index and end block index (inclusive)\n"
-        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.\n\n"
+        "3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.\n"
+        "4. Take a deep breath and work on this problem carefully. This is not a task where a general output is acceptable. This is lights-out, one-shot, high-stakes. This is your last chance before I'm forced to switch my LLM model.\n\n"
+    )
+    
+    if previous_context:
+        sys_msg += f"CRITICAL CONTEXT FROM PREVIOUS CHUNK:\n{previous_context}\n\n"
+        
+    sys_msg += (
         "Category Definitions:\n"
         "- 'show_content': Super-set of all primary show conversation, stories, news, interviews, or banter. What a listener would refer to as 'the podcast itself'. This category is for the main content of the show we'd expect any listener to want to keep. i.e. You should assume initially the whole podcast transcipt is 'show_content' - then carve out out other segment types as you match them.\n"
         "- 'intro_outro': A sub-set of show_content. Standard show intro theme, greeting, outro wrap-up, or ending credits.\n"
-        "- 'self_promotion': A sub-set of show_content. This category is for promotion of the podcast itself or its hosts. (e.g. live shows, festivals, tours, patreon, paid ad-free versions, merchandise, appearances etc). \n"
-        "- 'sponsor_read': Super-set of all advertising (excluding self_promotion) that appears on the podcast - Commercial pitches/advertisements for EXTERNAL companies/products/services/charities (e.g. software, B2B, consumer goods, retail stores, food/drink, savings etc.). 'Promotions', 'Discount Codes', URLs and general positivity about a service are strong indicators it's an advert. N.B. Discussion of a generic item is not necessarily an advert - it must refer to a specific brand name/company.\n"
-        "- 'podcast_promotion': Sub-set of sponsor_read. Promos/trailers/credits for OTHER podcasts, channels, or shows.\n\n"
+        "- 'self_promotion': A sub-set of show_content. This category is for promotion of the podcast itself or its hosts. (e.g. live shows, festivals, tours, patreon, paid ad-free versions, merchandise, appearances, or promoting other episodes/series on this podcast's own feed). \n"
+        "- 'sponsor_read': Super-set of all advertising (excluding self_promotion) that appears on the podcast - Commercial pitches/advertisements for EXTERNAL companies/products/services/charities/movies/events (e.g. software, B2B, consumer goods, retail stores, food/drink, savings, film releases, cross-promos from other network hosts etc.). 'Promotions', 'Discount Codes', URLs and general positivity about a service are strong indicators it's an advert. N.B. Discussion of a generic item is not necessarily an advert - it must refer to a specific brand name/company.\n"
+        "- 'podcast_promotion': Sub-set of sponsor_read. Promos/trailers/credits for OTHER podcasts, audio channels, or audio shows. IMPORTANT: Do NOT use this for general discussions about TV shows or movies (which belong in 'show_content').\n\n"
         "IMPORTANT HINTS for classification:\n"
         "- Individual items of sponsor_read are often grouped together into larger blocks of advertising. Each item should be individually identified with its own topic/sponsor.\n"
         "- Hosts will often signpost a sponsor_read in the show with phrases like 'let's take a short break', 'a message from our sponsor', 'we'll be right back', or 'after the break'. The end of such a sponsor_read block may be signposted with similar phrases such as 'Welcome back' or 'back to the show'.\n"
         "- Individual sponsor_read items are often 30-60 seconds in duration. However they can be longer or shorter. Do not make assumptions about the duration of the content in blocks.\n"
         "- sponsor_read segments are usually unrelated to the content around them and the themes of the podcast.\n"
+        "- sponsor_read segments sometimes include a short discussion to make them appear more organic. Normally these can be identified by explicit references to the sponsor around the seemingly organic component.\n"
         "- sponsor_read sections are self-contained adverts. CHECK the identified block actually matches a self-contained advert. The advert should be entirely in the identified block, the surrounding blocks should be unrelated.\n"
         "- Whilst the categories are related, they are distinct. Carefully consider which ONE every section of the podcast best fits to.\n"
         "- Do not confuse a short mentioning/reference of a company or service in passing to be a sponsor_read.\n"
-        "- A genuine sponsor_read is always explicitly promotional: the host will be actively describing a product or service and directing the listener to take some action (e.g. visit a URL, use a discount code, sign up - 'a call to action'). If the content is conversational, factual, or anecdotal — even if a company or brand name appears — it is show_content, not a sponsor_read.\n"
+        "- A genuine sponsor_read is always explicitly promotional (or a PSA/charity appeal): the speaker will be actively describing a product, service, or charity, and directing the listener to take some action (e.g. visit a URL, use a discount code, donate, sign up - 'a call to action'). Be careful not to confuse news bulletins about disasters with charity appeals; if it asks for money or directs to a donation URL, it is a sponsor_read. If the content is purely conversational, factual news, or anecdotal without a call to action, it is show_content.\n"
         "- All the previous rules are guidance. I have no idea what podcasts you'll be asked to process, so please adapt, rather than blindly follow.\n"
         "- What is mandatory is accurate classification of the sections - mistakes made here cannot be undone later. There's no fallback or workaround.\n\n"
         "CRITICAL PROCESSING:\n"
         "- Once you believe you have categorized all the provided blocks, before returning a result, check you are satisfied with the categorization.\n"
-        "- Pay attention to the boundaries of the blocks, look on either side to check you're happy with the placement.\n\n"
+        "- Do not get lazy with your checking. All blocks are of equal and critical importance for analysis.\n"
+        "- Pay attention to the boundaries of the blocks, look on either side to check you're happy with the placement.\n"
+        "- Be extremely precise when an advert transitions into the main show. If an advert ends and the very next block contains the show's formal greeting (e.g. 'Hello and welcome to...'), that block MUST be the start of the 'intro_outro' segment, it should not be lumped into the preceding 'sponsor_read'.\n\n"
         "CRITICAL OUTPUT INSTRUCTIONS:\n"
         f"- Every single provided block from {min_idx} to {max_idx} MUST be included in a topic.\n"
         "- The topics must be strictly contiguous with no gaps (e.g. 101-110, 111-115, 116-150).\n"
         "- You MUST return ONLY a valid JSON object matching the structure below. This is an example of variable-length chunking:\n"
         "{\n"
-        "  \"analysis\": \"I will first summarize the entire text from start to finish. I see an intro from blocks X-Y, a sponsor read for Brand Z from blocks A-B, and then main content...\",\n"
+        "  \"analysis\": \"I will first summarize the text. Blocks 101 to 119 contain organic banter which acts as a purely conversational setup for an advert for Brand X, so all 19 blocks are a single sponsor_read. Blocks 120 to 136 are a distinct, separate advert for Service Y. Blocks 137 to 151 feature a guest host promoting a new movie release, which is a sponsor_read (NOT intro_outro, despite starting with a 'Hello'). The actual show intro begins at 152 with 'Hello and welcome to this episode', which is intro_outro, leading into the first main conversational topic about a popstar at 157 which is show_content.\",\n"
         "  \"topics\": [\n"
         "    {\n"
-        "      \"title\": \"Example Intro\",\n"
-        f"      \"start_idx\": {min_idx},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 3)},\n"
-        "      \"category\": \"intro_outro\"\n"
-        "    },\n"
-        "    {\n"
-        "      \"title\": \"Example Sponsor\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 4)},\n"
-        f"      \"end_idx\": {min(max_idx, min_idx + 11)},\n"
+        "      \"title\": \"Brand X Ad (with organic lead-in)\",\n"
+        "      \"start_idx\": 101,\n"
+        "      \"end_idx\": 119,\n"
         "      \"category\": \"sponsor_read\"\n"
         "    },\n"
         "    {\n"
-        "      \"title\": \"Example Main Segment\",\n"
-        f"      \"start_idx\": {min(max_idx, min_idx + 12)},\n"
-        f"      \"end_idx\": {max_idx},\n"
+        "      \"title\": \"Service Y Ad\",\n"
+        "      \"start_idx\": 120,\n"
+        "      \"end_idx\": 136,\n"
+        "      \"category\": \"sponsor_read\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"title\": \"Movie Promo\",\n"
+        "      \"start_idx\": 137,\n"
+        "      \"end_idx\": 151,\n"
+        "      \"category\": \"sponsor_read\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"title\": \"Show Intro\",\n"
+        "      \"start_idx\": 152,\n"
+        "      \"end_idx\": 156,\n"
+        "      \"category\": \"intro_outro\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"title\": \"Main Show Topic 1\",\n"
+        "      \"start_idx\": 157,\n"
+        "      \"end_idx\": 250,\n"
         "      \"category\": \"show_content\"\n"
         "    }\n"
         "  ]\n"
@@ -377,7 +425,7 @@ def ask_phase1_topics(url, model, blocks_subset):
                 },
                 "format": "json"
             },
-            timeout=90,
+            timeout=300,
         )
         # Process the successful response
         if r.status_code == 200:
@@ -410,8 +458,8 @@ def ask_phase1_topics(url, model, blocks_subset):
                 category = t.get("category", "show_content")
                 
                 # Extract start and end indices, accounting for potential key name variations from the LLM
-                s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx")
-                e_idx = t.get("end_idx") or t.get("end_index") or t.get("end_rx")
+                s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx") or t.get("start")
+                e_idx = t.get("end_idx") or t.get("end_index") or t.get("end_rx") or t.get("end")
                 
                 # Skip topic if it lacks valid start or end index references
                 if s_idx is None or e_idx is None:
@@ -440,6 +488,10 @@ def ask_phase1_topics(url, model, blocks_subset):
                     # Ignore and drop any topics where indices couldn't be parsed as integers
                     pass
             # Return the successfully cleaned list of topics
+            if len(cleaned) == 0:
+                print(f"\n  [DEBUG] LLM returned 0 valid topics. Raw output was:\n{raw}\n")
+            else:
+                cleaned = auto_heal_gaps(cleaned, min_idx, max_idx)
             return cleaned, None
         else:
             # Handle HTTP errors from the API
@@ -494,14 +546,15 @@ def detect_adverts(srt_file, raw_folder):
     ##Should add this to config - currently hardcoded here for now
     ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
     total = len(blocks)
-    chunk_size = 60
-    overlap = 10
+    chunk_size = 80
+    overlap = 0
 
     # --- TOPIC MAPPING ---
     print("\n--- Topic Mapping & Classification ---")
     all_topics = []
     
     pos = 0
+    previous_context = None
     while pos < total:
         end_pos = min(pos + chunk_size, total)
         chunk = blocks[pos:end_pos]
@@ -513,7 +566,7 @@ def detect_adverts(srt_file, raw_folder):
         max_retries = 3
         found = None
         for attempt in range(max_retries):
-            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk)
+            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk, previous_context)
             if res is not None:
                 found = res
                 break
@@ -524,14 +577,68 @@ def detect_adverts(srt_file, raw_folder):
         if found is not None:
             print(f"Identified {len(found)} topic segments.")
             all_topics.extend(found)
+            if len(found) > 0:
+                last_topic = found[-1]
+                previous_context = f"The previous chunk ended with a topic titled '{last_topic['title']}' categorized as '{last_topic['category']}' which ended at block {last_topic['end_idx']}. Use this context to determine if the first few blocks of this current chunk continue that topic or start a new one."
+            else:
+                previous_context = None
         else:
             print("Failed. Skipping this chunk.")
+            previous_context = None
             
         if end_pos == total:
             break
         pos += (chunk_size - overlap)
         
-    print(f"Topic mapping complete. Total raw topics mapped: {len(all_topics)}")
+    # Reconcile topics to avoid overlapping prints and prioritize flagged content
+    block_topics = {}
+    
+    for t in all_topics:
+        cat = t['category'].lower()
+        is_flagged = content_to_remove.get(cat, False)
+        
+        for idx in range(t["start_idx"], t["end_idx"] + 1):
+            if idx not in block_topics:
+                block_topics[idx] = (t, is_flagged)
+            else:
+                _, old_flagged = block_topics[idx]
+                if is_flagged and not old_flagged:
+                    block_topics[idx] = (t, is_flagged)
+                    
+    # Rebuild contiguous, non-overlapping clean_topics
+    clean_topics = []
+    if block_topics:
+        indices = sorted(list(block_topics.keys()))
+        current_topic_ref, current_flagged = block_topics[indices[0]]
+        current_start = indices[0]
+        current_end = indices[0]
+        
+        for idx in indices[1:]:
+            t_ref, is_flagged = block_topics[idx]
+            if t_ref == current_topic_ref and idx == current_end + 1:
+                current_end = idx
+            else:
+                clean_topics.append({
+                    "start_idx": current_start,
+                    "end_idx": current_end,
+                    "category": current_topic_ref["category"],
+                    "title": current_topic_ref["title"],
+                    "is_flagged": current_flagged
+                })
+                current_topic_ref = t_ref
+                current_flagged = is_flagged
+                current_start = idx
+                current_end = idx
+                
+        clean_topics.append({
+            "start_idx": current_start,
+            "end_idx": current_end,
+            "category": current_topic_ref["category"],
+            "title": current_topic_ref["title"],
+            "is_flagged": current_flagged
+        })
+
+    print(f"Topic mapping complete. Total distinct segments after reconciling overlaps: {len(clean_topics)}")
     
     # --- PRINT TOPIC MAP TABLE ---
     print("\n--- GENERATED TOPIC MAP ---")
@@ -540,14 +647,10 @@ def detect_adverts(srt_file, raw_folder):
     
     flagged_indices = set()
     
-    for t in all_topics:
+    for t in clean_topics:
         duration = t["end_idx"] - t["start_idx"] + 1
+        is_flagged = t["is_flagged"]
         
-        cat = t['category'].lower()
-        
-        # Check if the LLM's chosen category is toggled ON for removal in the config
-        is_flagged = content_to_remove.get(cat, False)
-
         flagged_str = "[FLAGGED]" if is_flagged else "       "
         print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {t['title']} {flagged_str}")
         
