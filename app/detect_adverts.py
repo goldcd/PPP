@@ -932,7 +932,14 @@ def detect_adverts(srt_file, raw_folder):
                         # conversation — it is the show opening. No podcast places a sponsored
                         # conversation immediately after its formal greeting.
                         gap_follows_intro = (before_seg is not None and before_seg['category'] == 'intro_outro')
-                        if all_show and not has_intro_outro and not gap_follows_intro and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
+                        # Pre-roll zone guard: if the before-ad starts within the first 2 minutes,
+                        # we are in pre-roll territory. The gap is show content (intro, teaser,
+                        # or cold-open), not a sponsored conversation. This catches dramatic
+                        # cold-opens sandwiched between pre-rolls where no intro_outro anchor
+                        # exists yet to trigger the semantic guards above.
+                        PREROLL_THRESHOLD_SECS = 120
+                        is_preroll = t0 <= PREROLL_THRESHOLD_SECS
+                        if all_show and not has_intro_outro and not gap_follows_intro and not is_preroll and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
                             print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
                             updated = [{
                                 'start_idx':  gap_start_blk,
