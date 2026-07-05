@@ -9,6 +9,7 @@ from app.transcribe import transcribe_all
 from app.detect_adverts import detect_all_adverts
 from app.generate_cleaned import generate_all_cleaned
 from app.export import export
+from app.generate_stats import generate_stats
 
 def call_add_RSS():
     add_RSS()
@@ -34,13 +35,16 @@ def call_generate_cleaned():
 def call_export():
     export()
 
-## Get new podcasts and do all the processing - option I presume will be used most of the time
+def call_generate_stats():
+    generate_stats()
+
 def call_process_all():
     download()
     transcribe_all()
     detect_all_adverts()
     generate_all_cleaned()
     export()
+    generate_stats()
 
 
 ##First very simple action - just trigger this to close the app

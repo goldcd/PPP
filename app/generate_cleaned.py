@@ -237,7 +237,8 @@ def generate_cleaned(podcast_path, output_folder, filename):
 
     raw_blocks_list = raw_ad_content.replace("\r\n", "\n").strip().split("\n\n")
     if not raw_blocks_list or not raw_blocks_list[0]:
-        print("No ads to remove.")
+        print("No ads to remove. Copying original file to output.")
+        shutil.copy2(input_mp3, output_mp3)
         return
 
     blocks = parse_srt_blocks(raw_blocks_list)

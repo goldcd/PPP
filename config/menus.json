@@ -51,6 +51,11 @@
                         "key": "5",
                         "label": "Export Podcasts to config specified file path",
                         "action": "call_export"
+                    },
+                    {
+                        "key": "6",
+                        "label": "Generate Stats Report",
+                        "action": "call_generate_stats"
                     }
                 ]
             },
@@ -82,7 +87,8 @@
             },
             {
                 "key": "6",
-                "label": "Dead End"
+                "label": "Generate Stats Report",
+                "action": "call_generate_stats"
             },
             {
                 "key": "7",
