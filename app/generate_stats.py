@@ -201,8 +201,14 @@ def generate_stats():
     total_podcasts = 0
 
     for podcast in podcasts:
-        valid_pcts = [e['stats'][2] for e in podcast['episodes'] if e['stats'] is not None]
-        avg_pct    = sum(valid_pcts) / len(valid_pcts) if valid_pcts else None
+        valid_stats = [e['stats'] for e in podcast['episodes'] if e['stats'] is not None]
+        if valid_stats:
+            total_podcast_secs = sum(s[0] for s in valid_stats)
+            total_podcast_ad_secs = sum(s[1] for s in valid_stats)
+            avg_pct = (total_podcast_ad_secs / total_podcast_secs) * 100 if total_podcast_secs > 0 else 0.0
+        else:
+            avg_pct = None
+            
         avg_str    = f"{avg_pct:.1f}%" if avg_pct is not None else "N/A"
 
         lines.append("---")
