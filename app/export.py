@@ -48,6 +48,18 @@ def export():
     with open("data/feeds.json", "r", encoding="utf-8") as f:
         feeds = json.load(f)
 
+    ## Clean up any orphaned folders in the export path that are no longer in our feeds list
+    active_safe_names = {feed.get("safe_name", str(feed.get("id"))) for feed in feeds}
+    
+    try:
+        for item in os.listdir(export_path):
+            item_path = os.path.join(export_path, item)
+            if os.path.isdir(item_path) and item not in active_safe_names:
+                print(f"Cleaning up orphaned export folder: {item}")
+                shutil.rmtree(item_path)
+    except Exception as e:
+        print(f"Error during export cleanup: {e}")
+
     feed_links = []
 
     ##Now start going through our output path, to see what we need to push to export
