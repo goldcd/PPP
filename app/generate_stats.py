@@ -206,10 +206,12 @@ def generate_stats():
             total_podcast_secs = sum(s[0] for s in valid_stats)
             total_podcast_ad_secs = sum(s[1] for s in valid_stats)
             avg_pct = (total_podcast_ad_secs / total_podcast_secs) * 100 if total_podcast_secs > 0 else 0.0
-        else:
-            avg_pct = None
             
-        avg_str    = f"{avg_pct:.1f}%" if avg_pct is not None else "N/A"
+            ad_m = int(round(total_podcast_ad_secs / 60))
+            tot_m = int(round(total_podcast_secs / 60))
+            avg_str = f"({ad_m}m/{tot_m}m) {avg_pct:.1f}%"
+        else:
+            avg_str = "N/A"
 
         lines.append("---")
         lines.append("")
@@ -219,7 +221,13 @@ def generate_stats():
         lines.append("|---|---:|")
 
         for ep in podcast['episodes']:
-            pct_str = f"{ep['stats'][2]:.1f}%" if ep['stats'] is not None else "—"
+            if ep['stats'] is not None:
+                total_secs, ad_secs, pct = ep['stats']
+                ad_m = int(round(ad_secs / 60))
+                tot_m = int(round(total_secs / 60))
+                pct_str = f"({ad_m}m/{tot_m}m) {pct:.1f}%"
+            else:
+                pct_str = "—"
             # Escape any pipe characters in titles
             safe_title = ep['title'].replace('|', '\\|')
             lines.append(f"| {safe_title} | {pct_str} |")
