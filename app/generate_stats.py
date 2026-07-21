@@ -2,6 +2,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 """
 generate_stats.py
@@ -129,7 +130,7 @@ def generate_stats():
 
         # --- Parse RSS ---
         podcast_title = podcast_folder  # fallback
-        guid_to_title = {}
+        guid_to_info = {}
         guid_order    = []
 
         try:
@@ -144,9 +145,22 @@ def generate_stats():
                 for item in channel.findall('item'):
                     guid_el     = item.find('guid')
                     ep_title_el = item.find('title')
+                    pub_date_el = item.find('pubDate')
                     if guid_el is not None and ep_title_el is not None:
                         guid = guid_el.text.strip()
-                        guid_to_title[guid] = ep_title_el.text.strip()
+                        title = ep_title_el.text.strip()
+                        pub_date = "Unknown Date"
+                        if pub_date_el is not None and pub_date_el.text:
+                            try:
+                                dt = parsedate_to_datetime(pub_date_el.text.strip())
+                                pub_date = dt.strftime("%Y-%m-%d")
+                            except Exception:
+                                pass
+                        
+                        guid_to_info[guid] = {
+                            'title': title,
+                            'pub_date': pub_date
+                        }
                         guid_order.append(guid)
         except Exception as e:
             print(f"  Warning: could not parse RSS for '{podcast_folder}': {e}")
@@ -164,13 +178,16 @@ def generate_stats():
                 if not os.path.exists(ad_path):
                     continue  # not yet processed
 
-                ep_title = guid_to_title.get(guid, f"Unknown episode ({guid[:8]}...)")
+                info = guid_to_info.get(guid, {'title': f"Unknown episode ({guid[:8]}...)", 'pub_date': 'Unknown Date'})
+                ep_title = info['title']
+                pub_date = info['pub_date']
                 stats    = _calc_episode_stats(srt_path, ad_path)
                 rss_pos  = guid_order.index(guid) if guid in guid_order else 9999
 
                 episodes.append({
                     'guid':    guid,
                     'title':   ep_title,
+                    'pub_date': pub_date,
                     'stats':   stats,   # (total_secs, ad_secs, pct) or None
                     'rss_pos': rss_pos,
                 })
@@ -178,16 +195,18 @@ def generate_stats():
         if not episodes:
             continue
 
-        # Sort by RSS feed position (most recent first)
-        episodes.sort(key=lambda e: e['rss_pos'])
+        # Sort by published date descending (fallback to rss_pos if unknown)
+        episodes.sort(key=lambda e: e['pub_date'], reverse=True)
 
         podcasts.append({
             'title':    podcast_title,
             'episodes': episodes,
+            'latest_pub': episodes[0]['pub_date'] if episodes else 'Unknown Date'
         })
 
-    # Sort podcasts alphabetically
+    # Sort podcasts by latest published episode descending, then alphabetically
     podcasts.sort(key=lambda p: p['title'].lower())
+    podcasts.sort(key=lambda p: p['latest_pub'], reverse=True)
 
     # --- Build Markdown report ---
     now   = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -217,8 +236,8 @@ def generate_stats():
         lines.append("")
         lines.append(f"## {podcast['title']}  _(avg: {avg_str})_")
         lines.append("")
-        lines.append("| Episode | Ad % |")
-        lines.append("|---|---:|")
+        lines.append("| Broadcast Date | Episode | Ad % |")
+        lines.append("|---|---|---:|")
 
         for ep in podcast['episodes']:
             if ep['stats'] is not None:
@@ -230,7 +249,7 @@ def generate_stats():
                 pct_str = "—"
             # Escape any pipe characters in titles
             safe_title = ep['title'].replace('|', '\\|')
-            lines.append(f"| {safe_title} | {pct_str} |")
+            lines.append(f"| {ep['pub_date']} | {safe_title} | {pct_str} |")
 
         lines.append("")
         total_eps      += len(podcast['episodes'])

@@ -572,7 +572,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
                     {"role": "user", "content": user_msg},
                 ],
                 "stream": True,
-                "think": True,  # Option A: enable CoT reasoning on the hard cases
+                "think": False,  # Changed to False to prevent infinite generation loops on Qwen3
                 "options": {
                     "temperature": 0.0,
                     "num_ctx": 8192,  # more room for reasoning tokens
