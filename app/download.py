@@ -43,14 +43,24 @@ def download():
         ##Work out how far back in this feed we should be looking, based upon the syncfrom date in the feeds file
         ##I really should add an option to let the user override this when they on-board. Maybe config just becomes a pre-populated default
         syncfrom_date = datetime.datetime.fromisoformat(feed['syncFrom'])
+        # Make syncfrom_date timezone-aware (UTC) to properly compare with pubDate.
+        # Older naive dates in feeds.json are treated as local time.
+        if syncfrom_date.tzinfo is None:
+            syncfrom_date = syncfrom_date.astimezone(datetime.timezone.utc)
+        else:
+            syncfrom_date = syncfrom_date.astimezone(datetime.timezone.utc)
 
         import email.utils
         ## Iterate through the rss.xml entries and process any that are newer than our syncfrom date
         for item in root.findall("channel/item"):
             pubdate = item.find("pubDate").text
             
-            # Parse the pubDate, and strip timezone info to make it easy for comparison
-            pubdate = email.utils.parsedate_to_datetime(pubdate).replace(tzinfo=None)
+            # Parse the pubDate and ensure it is timezone-aware (UTC)
+            pubdate = email.utils.parsedate_to_datetime(pubdate)
+            if pubdate.tzinfo is None:
+                pubdate = pubdate.replace(tzinfo=datetime.timezone.utc)
+            else:
+                pubdate = pubdate.astimezone(datetime.timezone.utc)
             
             if pubdate > syncfrom_date:
 
@@ -74,8 +84,8 @@ def download():
                 with open(mp3_path, "wb") as f:
                     f.write(download_response.content)
 
-        ##New we've grabbed any new podcasts, we should update the syncfrom date to be the current date
-        feed['syncFrom'] = datetime.datetime.now().isoformat()
+        ##New we've grabbed any new podcasts, we should update the syncfrom date to be the current date (in UTC)
+        feed['syncFrom'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         save_feed_file(feeds)        
 
                 

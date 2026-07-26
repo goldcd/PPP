@@ -91,7 +91,7 @@ def add_RSS():
     config = toml.loads(open("config.toml").read())
     ##Get the lookback from the config file, and then offset this from a current datestamp
     lookback = config["RSS_Import"]["initial_podcast_lookback"]
-    sync_date = datetime.datetime.now() - datetime.timedelta(days=lookback)
+    sync_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=lookback)
     syncfrom = sync_date.isoformat()
 
     ##Now append the entry to our feeds list
