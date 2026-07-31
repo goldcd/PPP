@@ -43,8 +43,8 @@ class Menu():
 
     def get_selection(self, choice):
         
-        ## A bit hacky, but we're going to assume if they enter a 0, they want to go back to the main menu
-        if choice == "0":
+        ## If we are not at the root menu, 0 goes back to root. Otherwise, allow normal processing for 0 (Exit).
+        if choice == "0" and self.depth != self.menu["root"]:
             self.depth = self.menu["root"]
             return
         ## If it wasn't a 0, then just go on as we did before, actually drilling down and seeing what they selected
