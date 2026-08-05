@@ -18,6 +18,7 @@ The current scope is to:
   - Generate SRT of content to be removed
 - Generate a 'cleaned' version of the podcast with these segments excised
 - Optionally output a web page with modified feeds and podcasts, allowing you to subscribe to them however you normally do
+- Includes basic logging and stat generation
 
 ## Prerequisites
 
@@ -145,4 +146,4 @@ Start  | End    | Duration | Category           | Score | Title
   - i.e. I want to run container on my NAS to push feeds and detect new podcasts, but offload processing to my desktop if it's on.
   - You've got the http/messaging module - so maybe nice project.
 - Currently no mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
-- Currently we hard-cut adverts. Not seen mistakes yet, but they'll happen. Maybe add a chapter annotation as a mandatory feature. Then can have the cutting of adverts as an optional extra (I'll need to check what podcast players know to skip advert chapters, and what triggers them)
+
