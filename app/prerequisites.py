@@ -113,7 +113,7 @@ def check_prerequisites():
     print("Checking system prerequisites...")
     system = platform.system()
     
-    missing_whisper = not is_python_package_installed("faster_whisper")
+    missing_whisper = not is_python_package_installed("whisperx")
     missing_ffmpeg = not is_command_installed("ffmpeg")
     missing_ollama = not is_command_installed("ollama")
     
@@ -140,11 +140,11 @@ def check_prerequisites():
     if not (missing_whisper or missing_ffmpeg or missing_ollama or missing_cuda_support):
         gpu_status = " (GPU enabled)" if is_gpu_enabled else ""
         if not is_ollama_service_running() and not missing_ollama:
-            print(f"[OK] faster-whisper: Found{gpu_status}")
+            print(f"[OK] whisperx: Found{gpu_status}")
             print("[OK] FFmpeg: Found")
             print("[WARN] Ollama: CLI found, but the background service is not running. (Run: ollama serve)")
         else:
-            print(f"[OK] faster-whisper: Found{gpu_status}")
+            print(f"[OK] whisperx: Found{gpu_status}")
             print("[OK] FFmpeg: Found")
             print("[OK] Ollama: Found and running")
             print("[SUCCESS] All prerequisites met!\n")
@@ -153,11 +153,11 @@ def check_prerequisites():
     # Print status of what's missing or needs update
     print("\n--- Missing Prerequisites ---")
     if missing_whisper:
-        print("[FAIL] faster-whisper (Python package) is missing.")
+        print("[FAIL] whisperx (Python package) is missing.")
     elif missing_cuda_support:
         print("[FAIL] PyTorch is CPU-only, but an NVIDIA GPU is available (GPU support is highly recommended).")
     else:
-        print("[OK] faster-whisper: Found")
+        print("[OK] whisperx: Found")
 
     if missing_ffmpeg:
         print("[FAIL] FFmpeg (System audio encoder/decoder) is missing.")
@@ -181,7 +181,7 @@ def check_prerequisites():
     installation_success = True
 
     if missing_whisper:
-        success = install_python_package("faster-whisper")
+        success = install_python_package("whisperx")
         if sys.version_info < (3, 11):
             install_python_package("tomli")
         if not success:
@@ -218,7 +218,7 @@ def check_prerequisites():
 
     if installation_success:
         print("\n[SUCCESS] Auto-installation completed successfully!")
-        print("💡 NOTE: If PyTorch CUDA support or system packages (like FFmpeg/Ollama) were installed, you MUST restart your terminal/IDE for changes to take effect.")
+        print("NOTE: If PyTorch CUDA support or system packages (like FFmpeg/Ollama) were installed, you MUST restart your terminal/IDE for changes to take effect.")
         input("\nPress Enter to exit and restart your program...")
         sys.exit(0)
     else:
