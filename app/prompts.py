@@ -60,17 +60,20 @@ CRITICAL OUTPUT INSTRUCTIONS:
 
 10. POST-AD BANTER (CRITICAL RULE): If the hosts continue to organically discuss the sponsor, laugh about the product, or chat about the sponsor's features AFTER the main pitch, this banter is STILL part of the `sponsor_read`. For example, if they talk about a sponsor's hold music, this is still the ad! The ad ONLY ends when the hosts clearly transition to the main show topic or begin the show intro. Do NOT separate the banter into a new `show_content` topic.
 
-11. METADATA CLUES (VOLUME & MUSIC): The transcript blocks now include volume (dBFS) metadata (e.g., `[SPEAKER_00 | Vol: -12.5dB]`) and `[MUSIC/NOISE]` blocks for loud non-speech gaps.
-    - Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary.
-    - A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. Use these non-speech blocks as strong boundary markers for transitions.
+11. METADATA CLUES (VOLUME, CPS & BRIGHTNESS): The transcript blocks now include additional metadata: Volume (dBFS), CPS (Characters Per Second), and Brightness (Spectral Centroid in Hz). (e.g., `[SPEAKER_00 | Vol: -12.5dB | CPS: 15 | Brightness: 1250Hz]`).
+    - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. 
+    - **CPS:** A sudden spike in CPS often indicates a scripted sponsor read or a rapid-fire legal disclaimer. 
+    - **Brightness:** A sudden, sustained shift in brightness (e.g., jumping from 1000Hz to 1600Hz) indicates the audio was recorded in a different environment, which is a massive red flag for a spliced-in ad.
 
 EXAMPLE OF CORRECT CHUNKING:
-[40] The Rest is Entertainment is presented by Octopus Energy.
-[41] Welcome back to the show. Let's talk about the new series of The Traitors.
-[42] Let's take a quick break.
-[43] This episode is sponsored by BetterHelp. Use code PODCAST.
-[44] Terms and conditions apply, taxes and fees apply.
-[45] Okay, we are back. Send us your questions!
+[40] [SPEAKER_01 | Vol: -15.0dB | CPS: 20 | Brightness: 1400Hz] The Rest is Entertainment is presented by Octopus Energy.
+[41] [SPEAKER_00 | Vol: -18.2dB | CPS: 18 | Brightness: 1100Hz] Welcome back to the show. Let's talk about the new series of The Traitors.
+[42] [SPEAKER_00 | Vol: -19.1dB | CPS: 22 | Brightness: 1150Hz] Let's take a quick break.
+[43] [MUSIC/NOISE | Vol: -14.2dB] (No speech detected)
+[44] [SPEAKER_02 | Vol: -12.5dB | CPS: 28 | Brightness: 2500Hz] This episode is sponsored by BetterHelp. Use code PODCAST.
+[45] [SPEAKER_02 | Vol: -13.0dB | CPS: 35 | Brightness: 2450Hz] Terms and conditions apply, taxes and fees apply.
+[46] [MUSIC/NOISE | Vol: -18.0dB] (No speech detected)
+[47] [SPEAKER_01 | Vol: -17.5dB | CPS: 15 | Brightness: 1200Hz] Okay, we are back. Send us your questions!
 
 Expected JSON output for above:
 {
@@ -85,22 +88,22 @@ Expected JSON output for above:
     {
       "title": "TV Discussion & Break Transition",
       "start_idx": 41,
-      "end_idx": 42,
+      "end_idx": 43,
       "category": "show_content",
       "confidence": "certain"
     },
     {
       "title": "BetterHelp Ad",
-      "start_idx": 43,
-      "end_idx": 44,
+      "start_idx": 44,
+      "end_idx": 45,
       "category": "sponsor_read",
       "confidence": "certain"
     },
     {
-      "title": "Listener Questions",
-      "start_idx": 45,
-      "end_idx": 45,
-      "category": "self_promotion",
+      "title": "Return from Break & Listener Questions",
+      "start_idx": 46,
+      "end_idx": 47,
+      "category": "show_content",
       "confidence": "certain"
     }
   ]

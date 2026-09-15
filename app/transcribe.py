@@ -53,6 +53,24 @@ def calculate_dbfs(audio_array, start_time, end_time, sample_rate=16000):
         
     return 20 * np.log10(rms)
 
+def calculate_spectral_centroid(audio_array, start_time, end_time, sample_rate=16000):
+    import numpy as np
+    start_sample = int(start_time * sample_rate)
+    end_sample = int(end_time * sample_rate)
+    segment_audio = audio_array[start_sample:end_sample]
+    
+    if len(segment_audio) == 0:
+        return 0.0
+        
+    spectrum = np.abs(np.fft.rfft(segment_audio))
+    freqs = np.fft.rfftfreq(len(segment_audio), 1.0/sample_rate)
+    
+    sum_spectrum = np.sum(spectrum)
+    if sum_spectrum == 0:
+        return 0.0
+        
+    return np.sum(freqs * spectrum) / sum_spectrum
+
 def transcribe_all():
     print("\nTranscribing!\n")
 
@@ -221,12 +239,17 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
                 
         # Main text segment
         seg_dbfs = calculate_dbfs(audio, start_time, end_time)
+        seg_centroid = calculate_spectral_centroid(audio, start_time, end_time)
+        
         start_str = format_srt_time(start_time)
         end_str = format_srt_time(end_time)
         text = segment["text"].strip()
         speaker = segment.get("speaker", "UNKNOWN")
         
-        srt_blocks.append(f"{block_index}\n{start_str} --> {end_str}\n[{speaker} | Vol: {seg_dbfs:.1f}dB] {text}\n\n")
+        duration = end_time - start_time
+        cps = int(len(text) / duration) if duration > 0 else 0
+        
+        srt_blocks.append(f"{block_index}\n{start_str} --> {end_str}\n[{speaker} | Vol: {seg_dbfs:.1f}dB | CPS: {cps} | Brightness: {int(seg_centroid)}Hz]\n{text}\n\n")
         block_index += 1
         last_end_time = end_time
     with open(srt_path, "w", encoding="utf-8") as f:
