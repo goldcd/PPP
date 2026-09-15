@@ -607,8 +607,8 @@ def detect_adverts(srt_file, raw_folder):
     ##Should add this to config - currently hardcoded here for now
     ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
     total = len(blocks)
-    chunk_size = 80
-    overlap = 0
+    chunk_size = 100
+    overlap = 20
 
     # --- TOPIC MAPPING ---
     print("\n--- Topic Mapping & Classification ---")
