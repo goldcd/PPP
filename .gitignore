@@ -15,3 +15,4 @@ app/heuristic_backup.py
 logs/
 
 testing_harness/
+test_detect.py

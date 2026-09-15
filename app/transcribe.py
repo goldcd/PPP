@@ -38,6 +38,20 @@ def format_srt_time(seconds):
         milliseconds -= 1000
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"    
 
+def calculate_dbfs(audio_array, start_time, end_time, sample_rate=16000):
+    import numpy as np
+    start_sample = int(start_time * sample_rate)
+    end_sample = int(end_time * sample_rate)
+    segment_audio = audio_array[start_sample:end_sample]
+    
+    if len(segment_audio) == 0:
+        return -100.0
+        
+    rms = np.sqrt(np.mean(segment_audio**2))
+    if rms == 0:
+        return -100.0
+        
+    return 20 * np.log10(rms)
 
 def transcribe_all():
     print("\nTranscribing!\n")
@@ -188,14 +202,33 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
     srt_path = os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt"))
     #AI to the rescue - although think I could have done that myself.. well googled it..
     srt_blocks = []
-    for i, segment in enumerate(result["segments"], start=1):
-        start = format_srt_time(segment["start"])
-        end = format_srt_time(segment["end"])
+    block_index = 1
+    last_end_time = 0.0
+    
+    for segment in result["segments"]:
+        start_time = segment["start"]
+        end_time = segment["end"]
+        
+        # Check for gap (music/noise detection)
+        gap_duration = start_time - last_end_time
+        if gap_duration > 1.5 and last_end_time > 0:
+            gap_dbfs = calculate_dbfs(audio, last_end_time, start_time)
+            if gap_dbfs > -45.0:  # Ignore total silence
+                start_str = format_srt_time(last_end_time)
+                end_str = format_srt_time(start_time)
+                srt_blocks.append(f"{block_index}\n{start_str} --> {end_str}\n[MUSIC/NOISE | Vol: {gap_dbfs:.1f}dB] (No speech detected)\n\n")
+                block_index += 1
+                
+        # Main text segment
+        seg_dbfs = calculate_dbfs(audio, start_time, end_time)
+        start_str = format_srt_time(start_time)
+        end_str = format_srt_time(end_time)
         text = segment["text"].strip()
         speaker = segment.get("speaker", "UNKNOWN")
         
-        srt_blocks.append(f"{i}\n{start} --> {end}\n[{speaker}] {text}\n\n")
-        
+        srt_blocks.append(f"{block_index}\n{start_str} --> {end_str}\n[{speaker} | Vol: {seg_dbfs:.1f}dB] {text}\n\n")
+        block_index += 1
+        last_end_time = end_time
     with open(srt_path, "w", encoding="utf-8") as f:
         f.writelines(srt_blocks)
             
