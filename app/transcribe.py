@@ -190,7 +190,7 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
     
     ##Transcribe the podcast!!
     
-    start_time = time.time()
+    job_start_time = time.time()
     
     mp3_path = os.path.join(raw_folder, mp3_file)
     print("Loading audio into memory...")
@@ -255,7 +255,7 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
     with open(srt_path, "w", encoding="utf-8") as f:
         f.writelines(srt_blocks)
             
-    elapsed_time = time.time() - start_time
+    elapsed_time = time.time() - job_start_time
     print(f"Finished transcribing {mp3_file} in {elapsed_time:.1f} seconds")
     
     if is_local_model:
