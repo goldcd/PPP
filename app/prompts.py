@@ -39,6 +39,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 1. BREAK ANNOUNCEMENTS ARE HARD BOUNDARIES: Phrases where hosts explicitly announce a break (e.g., "Let's go to a quick break", "Shall we go to a break?", "When we come back...") or return from one (e.g., "Welcome back", "We're back", "Okay, we are back") are ALWAYS `show_content`.
    - Never absorb a break announcement into an adjacent `sponsor_read`. 
    - A `sponsor_read` must only start AFTER the break announcement has finished, and it must end BEFORE the "welcome back" transition begins.
+   - DO NOT be lazy. If there is a break announcement at block 235, but the advert doesn't start until 238, the `sponsor_read` CANNOT start at block 217 just because there was a music block earlier. You must precisely separate the pre-break show conversation from the advert.
 
 2. GUEST ANSWERS & VOICE NOTES: When a host introduces a guest, expert, celebrity, or listener voice note to answer a question or provide commentary (e.g., "We went to [Name] to answer this question", "[Name], take it away"), this is `show_content`. Do not confuse a guest providing an informational answer with a `podcast_promotion` or `sponsor_read`, even if there is a sudden change in speaker.
 
@@ -61,7 +62,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 10. POST-AD BANTER (CRITICAL RULE): If the hosts continue to organically discuss the sponsor, laugh about the product, or chat about the sponsor's features AFTER the main pitch, this banter is STILL part of the `sponsor_read`. For example, if they talk about a sponsor's hold music, this is still the ad! The ad ONLY ends when the hosts clearly transition to the main show topic or begin the show intro. Do NOT separate the banter into a new `show_content` topic.
 
 11. METADATA CLUES (VOLUME, CPS & BRIGHTNESS): The transcript blocks now include additional metadata: Volume (dBFS), CPS (Characters Per Second), and Brightness (Spectral Centroid in Hz). (e.g., `[SPEAKER_00 | Vol: -12.5dB | CPS: 15 | Brightness: 1250Hz]`).
-    - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. HOWEVER, a `[MUSIC/NOISE]` block on its own does NOT mean an ad has started. If the hosts simply continue their normal show conversation after the music without pitching a product, it is still `show_content`. Always look for explicit break announcements and actual promotional pitches.
+    - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. HOWEVER, a `[MUSIC/NOISE]` block on its own does NOT mean an ad has started. If the hosts simply continue their normal show conversation after the music without pitching a product, it is still `show_content`. Do not use a `[MUSIC/NOISE]` block as an excuse to lazily group the subsequent show conversation into an upcoming advert. Wait for the actual pitch or explicit break announcement.
     - **CPS:** A sudden spike in CPS often indicates a scripted sponsor read or a rapid-fire legal disclaimer. 
     - **Brightness:** A sudden, sustained shift in brightness (e.g., jumping from 1000Hz to 1600Hz) indicates the audio was recorded in a different environment, which is a massive red flag for a spliced-in ad.
 
@@ -114,3 +115,22 @@ Expected JSON output for above:
 
 FINAL REMINDER: You MUST output a single valid JSON object containing an "analysis" string and a "topics" array of objects. Each topic object MUST contain ONLY 'title', 'start_idx', 'end_idx', 'category', and 'confidence'. Do NOT output a dictionary of topics. Do NOT output raw transcript text.
 ''')
+
+PROMPT_BOUNDARY_VERIFICATION = repr("""You are a precise podcast advert boundary verifier.
+An earlier pass has identified an advert within the provided transcript blocks, but its boundaries may be overly broad and include organic show content, especially before the advert begins.
+
+Your job is to read the provided blocks and determine the EXACT start block and EXACT end block of the actual advert.
+
+RULES:
+1. Advert Start: Look for the explicit sponsor pitch or a break announcement leading immediately into the pitch. If the transcript begins with regular show conversation (e.g. hosts chatting about news, answering questions), DO NOT include this in the advert. Wait for the actual transition.
+2. Open Sandwich: If the hosts tell a story that seamlessly transitions into pitching a product (a fake organic lead-in), the story IS part of the advert. However, if the preceding conversation is unrelated, cut it out.
+3. Advert End: Ensure all legal disclaimers, URLs, and post-ad sponsor banter are included. The advert ends exactly when the hosts transition back to the main show topic.
+4. If you cannot find any advert at all, you may return a start and end of -1.
+
+OUTPUT FORMAT:
+You MUST output ONLY a valid JSON object containing:
+- "analysis": A brief explanation of exactly where the show content ends and the advert pitch begins.
+- "start_idx": The exact integer block index where the advert begins.
+- "end_idx": The exact integer block index where the advert ends.
+
+Do not output any other text or format.""")

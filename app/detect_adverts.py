@@ -353,7 +353,9 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                 if not isinstance(t, dict):
                     continue
                 # Extract title and category, providing defaults if missing
-                title = t.get("title", "Unknown")
+                title = t.get("title") or t.get("topic") or t.get("name") or t.get("description") or "Unknown"
+                if title == "Unknown":
+                    print(f"\n  [DEBUG] Topic missing title key. Raw object: {t}")
                 category = t.get("category", "show_content")
                 
                 # Extract start and end indices, accounting for potential key name variations from the LLM
@@ -581,6 +583,84 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
 
 ## Top level function to call, to detect adverts (and now other stuff), in a single SRT file
 ## This is the new single-pass champion that chunks the SRT and passes it to Qwen to do all the heavy lifting
+
+import json
+
+def ask_boundary_verification(url, model, review_blocks):
+    if not review_blocks:
+        return None
+
+    min_idx = review_blocks[0]['idx']
+    max_idx = review_blocks[-1]['idx']
+    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in review_blocks)
+
+    from app.prompts import PROMPT_BOUNDARY_VERIFICATION
+    sys_msg = PROMPT_BOUNDARY_VERIFICATION
+
+    user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nOutput JSON with exact start_idx and end_idx."
+
+    try:
+        r = requests.post(
+            url,
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                "stream": True,
+                "think": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_ctx": 8192,
+                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                }
+            },
+            stream=True,
+            timeout=180,
+        )
+        if r.status_code != 200:
+            return None
+
+        raw_parts = []
+        for line in r.iter_lines():
+            if line:
+                try:
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        raw_parts.append(token)
+                    if chunk.get("done", False):
+                        break
+                except json.JSONDecodeError:
+                    pass
+
+        raw = "".join(raw_parts).strip()
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+
+        data = json.loads(raw)
+        analysis = data.get("analysis", "")
+        if analysis:
+            print(f"      [Boundary Verify] {analysis.strip()[:200]}")
+            
+        start_idx = data.get("start_idx")
+        end_idx = data.get("end_idx")
+        
+        if start_idx is None or end_idx is None or start_idx == -1 or end_idx == -1:
+            return -1, -1
+            
+        start_idx = int(start_idx)
+        end_idx = int(end_idx)
+        
+        return start_idx, end_idx
+
+    except Exception as e:
+        print(f"      [Boundary Verify Error] {e}")
+        return None
+
 def detect_adverts(srt_file, raw_folder):
     global ollama_url, model_to_use
     
@@ -892,6 +972,96 @@ def detect_adverts(srt_file, raw_folder):
 
     else:
         print("  No candidates flagged for second-pass review. First pass looks clean.")
+
+
+    # --- THIRD PASS: Boundary Verification for Adverts ---
+    print("\n--- Third Pass: Boundary Verification for Adverts ---")
+    third_pass_candidates = []
+    
+    for ci, seg in enumerate(clean_topics):
+        if seg['category'] in AD_CATEGORIES:
+            third_pass_candidates.append(ci)
+            
+    if third_pass_candidates:
+        print(f"  Found {len(third_pass_candidates)} advert(s) for boundary verification.")
+        
+        new_clean_topics = []
+        for ci, seg in enumerate(clean_topics):
+            if ci not in third_pass_candidates:
+                new_clean_topics.append(seg)
+                continue
+                
+            print(f"  Verifying boundaries for {seg['category']} at blocks {seg['start_idx']}–{seg['end_idx']}...")
+            
+            # Context: just 8 blocks before and after to avoid catching neighboring ads
+            context_start = max(1, seg['start_idx'] - 8)
+            max_available = max(blocks_map.keys()) if blocks_map else seg['end_idx'] + 8
+            context_end = min(max_available, seg['end_idx'] + 8)
+            
+            review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
+            
+            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
+            if new_bounds:
+                new_start, new_end = new_bounds
+                if new_start == -1 and new_end == -1:
+                    print(f"    -> Advert rejected by verification pass. Reclassifying as show_content.")
+                    seg['category'] = 'show_content'
+                    seg['title'] = 'Unverifiable Advert (Reclassified)'
+                    new_clean_topics.append(seg)
+                else:
+                    old_start = seg['start_idx']
+                    old_end = seg['end_idx']
+                    
+                    if new_start > new_end:
+                        print(f"    -> Invalid bounds returned ({new_start}-{new_end}). Keeping original.")
+                        new_clean_topics.append(seg)
+                        continue
+                        
+                    # We only allow SHRINKING the advert to recover show content.
+                    new_start = max(old_start, new_start)
+                    new_end = min(old_end, new_end)
+                    
+                    # Double check shrinking didn't invert bounds
+                    if new_start > new_end:
+                        print(f"    -> Shrunk bounds are invalid ({new_start}-{new_end}). Keeping original.")
+                        new_clean_topics.append(seg)
+                        continue
+                    
+                    if new_start > old_start or new_end < old_end:
+                        print(f"    -> Boundaries shrunk from {old_start}-{old_end} to {new_start}-{new_end}")
+                        
+                        if new_start > old_start:
+                            new_clean_topics.append({
+                                'start_idx': old_start,
+                                'end_idx': new_start - 1,
+                                'category': 'show_content',
+                                'title': 'Recovered Show Content (Pre-roll)',
+                                'confidence': 'certain'
+                            })
+                            
+                        seg['start_idx'] = new_start
+                        seg['end_idx'] = new_end
+                        new_clean_topics.append(seg)
+                        
+                        if new_end < old_end:
+                            new_clean_topics.append({
+                                'start_idx': new_end + 1,
+                                'end_idx': old_end,
+                                'category': 'show_content',
+                                'title': 'Recovered Show Content (Post-roll)',
+                                'confidence': 'certain'
+                            })
+                    else:
+                        print(f"    -> Boundaries confirmed as {old_start}-{old_end}")
+                        new_clean_topics.append(seg)
+            else:
+                print(f"    -> Verification failed or returned invalid response. Keeping original boundaries.")
+                new_clean_topics.append(seg)
+                
+        clean_topics = new_clean_topics
+        clean_topics.sort(key=lambda x: x['start_idx'])
+    else:
+        print("  No adverts found to verify.")
 
     # Rebuild flagged_indices from (potentially updated) clean_topics
     # Re-evaluate is_flagged for any topics that may have changed category
