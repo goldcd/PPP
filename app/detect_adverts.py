@@ -358,13 +358,6 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                     print(f"\n  [DEBUG] Topic missing title key. Raw object: {t}")
                 category = t.get("category", "show_content")
                 
-                # Correct misclassifications where LLM describes an ad in the title but uses show_content
-                lower_title = str(title).lower()
-                if category == "show_content":
-                    ad_keywords = ["sponsor read", "advert", "promotion", " ad ", " ad-", "- ad", "sponsored"]
-                    if any(kw in lower_title for kw in ad_keywords) or lower_title.endswith(" ad"):
-                        category = "sponsor_read"
-                        print(f"  [DEBUG] Auto-corrected category to sponsor_read based on title: {title}")
 
                 
                 # Extract start and end indices, accounting for potential key name variations from the LLM
