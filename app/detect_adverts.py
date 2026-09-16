@@ -246,7 +246,7 @@ def auto_heal_gaps(cleaned_topics, min_idx, max_idx):
 
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
-def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
+def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_num=0):
     ##Determine the start and end index of the blocks we're passing in
     valid_indices = {b['idx'] for b in blocks_subset}
     ##Get the min and max of this set of indices
@@ -260,7 +260,6 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
     ##NOTE TO SELF - I think I should let people choose what topics they want taking out of the podcast. Should also split between self-promotion and podcast-promotion
     
 
-
     from app.prompts import PROMPT_V18_DIARIZED_MASTER
     sys_msg = PROMPT_V18_DIARIZED_MASTER
     
@@ -268,13 +267,15 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
         sys_msg += f"\nCRITICAL CONTEXT FROM PREVIOUS CHUNK:\n{previous_context}\n\n"
 
     # Format the user message to include the actual transcript subset being processed.
-    user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nMap topics in JSON."
+    user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nPartition this transcript chronologically. Output ONLY a valid JSON object with the 'analysis' string and 'topics' array as specified in the instructions."
+    if attempt_num > 0:
+        user_msg += "\n\nCRITICAL WARNING: Your previous attempt failed. You MUST output an object with exactly two keys: 'analysis' and 'topics'. The 'topics' key MUST be a JSON array of objects. DO NOT output a dictionary for topics. DO NOT include subtopics, details, or raw text. Each topic object MUST have exactly: 'title', 'start_idx', 'end_idx', 'category', 'confidence'."
     
+    # If we are retrying, increase the temperature slightly to break out of deterministic hallucination loops
+    current_temperature = 0.0 + (0.2 * attempt_num)
+
     try:
         # Make a streaming POST request to the local LLM API (e.g., Ollama).
-        # Streaming means we receive tokens as they arrive, so the connection never
-        # times out waiting for the full response - it only times out if the model stops responding entirely.
-        # Temperature is set to 0.0 for more deterministic and consistent output formatting.
         r = requests.post(
             url,
             json={
@@ -286,7 +287,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                 "stream": True,
                 "think": False,
                 "options": {
-                    "temperature": 0.0,
+                    "temperature": current_temperature,
                     "num_ctx": 8192,
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
@@ -319,18 +320,29 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
                 
             # Parse the cleaned string into a JSON dictionary
             data = json.loads(raw)
-            # Print the LLM's reasoning so we can see if it's going off the rails
-            analysis = data.get("analysis", "")
-            if analysis:
-                print(f"\n  [LLM Analysis] {analysis.strip()}")
-            # Retrieve the list of topics from the parsed JSON
-            topics = data.get("topics", [])
+            
+            if isinstance(data, list):
+                analysis = ""
+                topics = data
+            else:
+                # Print the LLM's reasoning so we can see if it's going off the rails
+                analysis = data.get("analysis", "")
+                if analysis:
+                    print(f"\n  [LLM Analysis] {analysis.strip()}")
+                # Retrieve the list of topics from the parsed JSON
+                topics = data.get("topics", [])
             
             # Ensure the API returned a list as expected
             if not isinstance(topics, list):
-                if isinstance(topics, dict) and ("start_idx" in topics or "start" in topics or "start_index" in topics):
-                    # The LLM occasionally returns a single dictionary instead of an array
-                    topics = [topics]
+                if isinstance(topics, dict):
+                    # Check if it's a single topic object directly
+                    if "start_idx" in topics or "start" in topics or "start_index" in topics:
+                        topics = [topics]
+                    # Or maybe it's a dictionary of topics: {"1": {...}, "2": {...}}
+                    elif all(isinstance(v, dict) for v in topics.values()):
+                        topics = list(topics.values())
+                    else:
+                        return None, f"topics is not a list in JSON output (got dict with keys: {list(topics.keys())})"
                 else:
                     return None, f"topics is not a list in JSON output (got {type(topics).__name__})"
                 
@@ -381,6 +393,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
             # Return the successfully cleaned list of topics
             if len(cleaned) == 0:
                 print(f"\n  [DEBUG] LLM returned 0 valid topics. Raw output was:\n{raw}\n")
+                return None, "LLM returned 0 valid topics (missing block indices or invalid format)"
             else:
                 cleaned = auto_heal_gaps(cleaned, min_idx, max_idx)
             return cleaned, None
@@ -631,7 +644,7 @@ def detect_adverts(srt_file, raw_folder):
         max_retries = 3
         found = None
         for attempt in range(max_retries):
-            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk, previous_context)
+            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk, previous_context, attempt_num=attempt)
             if res is not None:
                 found = res
                 break

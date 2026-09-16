@@ -23,7 +23,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 - You MUST return ONLY a valid JSON object matching this structure:
 {
   "analysis": "I will first summarize the text and reason about the segments...",
-  "topics": [  // <- THIS MUST BE AN ARRAY OF OBJECTS
+  "topics": [
     {
       "title": "Segment name",
       "start_idx": 101,
@@ -79,6 +79,7 @@ EXAMPLE OF CORRECT CHUNKING:
 
 Expected JSON output for above:
 {
+  "analysis": "The segment starts with a sponsor read for Octopus Energy. Then a break is called, followed by another sponsor read for BetterHelp, and finally a return to show content.",
   "topics": [
     {
       "title": "Title Sponsor",
@@ -109,4 +110,7 @@ Expected JSON output for above:
       "confidence": "certain"
     }
   ]
-}''')
+}
+
+FINAL REMINDER: You MUST output a single valid JSON object containing an "analysis" string and a "topics" array of objects. Each topic object MUST contain ONLY 'title', 'start_idx', 'end_idx', 'category', and 'confidence'. Do NOT output a dictionary of topics. Do NOT output raw transcript text.
+''')
