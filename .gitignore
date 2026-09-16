@@ -16,3 +16,5 @@ logs/
 
 testing_harness/
 test_detect.py
+scratch_ad_analysis.py
+scratch_test_new_prompt.py
