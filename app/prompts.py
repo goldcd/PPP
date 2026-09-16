@@ -48,7 +48,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 
 4. ORGANIC LEAD-INS (LOOK-BACK): *Only* when an advert has NO clear explicit break transition before it, look back 3-5 blocks. If the hosts are using a "fake organic lead-in" or conversational setup that transitions seamlessly into pitching a product (e.g., "You remember that idea I had? I've been thinking about Shopify..."), include this setup in the ad. DO NOT use this rule if there is a clear break transition.
 
-5. TROJAN HORSE PODCAST PROMOTIONS: Some podcast promos open with a compelling editorial hook (e.g., a news analysis or gripping story) but end with a clear Call-To-Action like "...wherever you get your podcasts" or "...on Apple Podcasts". If there is NO break transition preceding it, reclassify the preceding hook as `podcast_promotion`.
+5. TROJAN HORSE PODCAST PROMOTIONS: Some podcast promos open with a compelling editorial hook (e.g., a news analysis, gripping story, or audio drama snippet) but end with a clear Call-To-Action like "...wherever you get your podcasts". If this happens right after a break announcement, the ENTIRE segment following the break is a `podcast_promotion`. If there is NO break transition preceding it, you must still reclassify the preceding hook as `podcast_promotion`.
 
 6. AD TAIL TRUNCATION & DISCLAIMERS: An ad is not over until all legal disclaimers (e.g., "Taxes and fees apply", "18+") and promotional URLs/codes (e.g., "claud.ai slash pivot") have been fully stated. Do not orphan these at the end of the ad; include them in the `sponsor_read`.
 
@@ -64,6 +64,8 @@ CRITICAL OUTPUT INSTRUCTIONS:
     - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. 
     - **CPS:** A sudden spike in CPS often indicates a scripted sponsor read or a rapid-fire legal disclaimer. 
     - **Brightness:** A sudden, sustained shift in brightness (e.g., jumping from 1000Hz to 1600Hz) indicates the audio was recorded in a different environment, which is a massive red flag for a spliced-in ad.
+
+12. SPONSOR NAME RE-MENTION (SANDWICH RULE): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, the ENTIRE block of conversation between the sponsor mentions is still part of the `sponsor_read`. Treat the whole segment as one continuous advert topic.
 
 EXAMPLE OF CORRECT CHUNKING:
 [40] [SPEAKER_01 | Vol: -15.0dB | CPS: 20 | Brightness: 1400Hz] The Rest is Entertainment is presented by Octopus Energy.
