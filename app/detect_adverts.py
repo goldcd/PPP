@@ -328,7 +328,11 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None):
             
             # Ensure the API returned a list as expected
             if not isinstance(topics, list):
-                return None, "topics is not a list in JSON output"
+                if isinstance(topics, dict) and ("start_idx" in topics or "start" in topics or "start_index" in topics):
+                    # The LLM occasionally returns a single dictionary instead of an array
+                    topics = [topics]
+                else:
+                    return None, f"topics is not a list in JSON output (got {type(topics).__name__})"
                 
             cleaned = []
             # Iterate through each topic to validate and clean up the data

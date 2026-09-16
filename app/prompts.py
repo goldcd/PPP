@@ -23,7 +23,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 - You MUST return ONLY a valid JSON object matching this structure:
 {
   "analysis": "I will first summarize the text and reason about the segments...",
-  "topics": [
+  "topics": [  // <- THIS MUST BE AN ARRAY OF OBJECTS
     {
       "title": "Segment name",
       "start_idx": 101,
@@ -46,7 +46,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 
 ### RULES FOR AD IDENTIFICATION (`sponsor_read` & `podcast_promotion`)
 
-4. ORGANIC LEAD-INS (LOOK-BACK): *Only* when an advert has NO clear explicit break transition before it, look back 3-5 blocks. If the hosts are using a "fake organic lead-in" or conversational setup that transitions seamlessly into pitching a product (e.g., "You remember that idea I had? I've been thinking about Shopify..."), include this setup in the ad. DO NOT use this rule if there is a clear break transition.
+4. ORGANIC LEAD-INS (OPEN SANDWICH): Sometimes an advert has NO explicit break transition, and instead uses an "open sandwich" setup. This is a "fake organic lead-in" where the hosts tell a story or have a thematic conversation that transitions seamlessly into pitching a product (e.g., complaining about sleep for 10 blocks, then saying "And that's why I use Casper"). If you find a product pitch, look back to find where the thematic setup began. The ENTIRE thematic setup must be classified as `sponsor_read`. HOWEVER, if the preceding conversation is about a completely unrelated show topic and the host just awkwardly pivots to an ad, DO NOT include the unrelated conversation. Only look back for *thematically integrated* setups.
 
 5. TROJAN HORSE PODCAST PROMOTIONS: Some podcast promos open with a compelling editorial hook (e.g., a news analysis, gripping story, or audio drama snippet) but end with a clear Call-To-Action like "...wherever you get your podcasts". If this happens right after a break announcement, the ENTIRE segment following the break is a `podcast_promotion`. If there is NO break transition preceding it, you must still reclassify the preceding hook as `podcast_promotion`.
 
@@ -61,11 +61,11 @@ CRITICAL OUTPUT INSTRUCTIONS:
 10. POST-AD BANTER (CRITICAL RULE): If the hosts continue to organically discuss the sponsor, laugh about the product, or chat about the sponsor's features AFTER the main pitch, this banter is STILL part of the `sponsor_read`. For example, if they talk about a sponsor's hold music, this is still the ad! The ad ONLY ends when the hosts clearly transition to the main show topic or begin the show intro. Do NOT separate the banter into a new `show_content` topic.
 
 11. METADATA CLUES (VOLUME, CPS & BRIGHTNESS): The transcript blocks now include additional metadata: Volume (dBFS), CPS (Characters Per Second), and Brightness (Spectral Centroid in Hz). (e.g., `[SPEAKER_00 | Vol: -12.5dB | CPS: 15 | Brightness: 1250Hz]`).
-    - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. 
+    - **Volume & Music:** Adverts are often mastered much louder than organic show content. A sudden, sustained spike in volume is a VERY strong indicator of an advert boundary. A `[MUSIC/NOISE]` block usually represents an ad jingle, a promo stinger, or the show's intro/outro theme. HOWEVER, a `[MUSIC/NOISE]` block on its own does NOT mean an ad has started. If the hosts simply continue their normal show conversation after the music without pitching a product, it is still `show_content`. Always look for explicit break announcements and actual promotional pitches.
     - **CPS:** A sudden spike in CPS often indicates a scripted sponsor read or a rapid-fire legal disclaimer. 
     - **Brightness:** A sudden, sustained shift in brightness (e.g., jumping from 1000Hz to 1600Hz) indicates the audio was recorded in a different environment, which is a massive red flag for a spliced-in ad.
 
-12. SPONSOR NAME RE-MENTION (SANDWICH RULE): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, the ENTIRE block of conversation between the sponsor mentions is still part of the `sponsor_read`. Treat the whole segment as one continuous advert topic.
+12. SPONSOR NAME RE-MENTION (CLOSED SANDWICH): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, this is a "closed sandwich". The ENTIRE block of conversation between the two sponsor mentions is part of the `sponsor_read`. Treat the whole segment as one continuous advert topic, regardless of how long it is.
 
 EXAMPLE OF CORRECT CHUNKING:
 [40] [SPEAKER_01 | Vol: -15.0dB | CPS: 20 | Brightness: 1400Hz] The Rest is Entertainment is presented by Octopus Energy.
