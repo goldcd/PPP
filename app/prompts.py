@@ -69,7 +69,7 @@ CRITICAL OUTPUT INSTRUCTIONS:
 
 12. SPONSOR NAME RE-MENTION (CLOSED SANDWICH): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, this is a "closed sandwich". The ENTIRE block of conversation between the two sponsor mentions is part of the `sponsor_read`. Treat the whole segment as one continuous advert topic, regardless of how long it is.
 
-13. META-DISCUSSION OF SPONSORSHIP (CRITICAL ANTI-FALSE-POSITIVE RULE): If hosts are discussing sponsorships, advertising deals, or brand names as a TOPIC OF CONVERSATION — rather than actively pitching a product to the listener — this is `show_content`, NOT `sponsor_read`. For example:
+13. META-DISCUSSION OF SPONSORSHIP (CRITICAL ANTI-FALSE-POSITIVE RULE): If hosts are discussing sponsorships, advertising deals, or brand names as a TOPIC OF CONVERSATION — rather than actively pitching a product to the listener — this is `show_content`, NOT `sponsor_read` AND NOT `podcast_promotion`. For example:
    - Hosts discussing how much revenue another podcast earns from its sponsors, or listing who those sponsors are (e.g. "They've got RAMP, Plaid, Google Gemini as sponsors, and they're on track for $30 million").
    - Hosts analysing the business model or commercial deals of another company, person, or media outlet.
    - Hosts commenting on the podcast industry's advertising ecosystem or sponsor relationships in general.
@@ -179,6 +179,7 @@ You MUST output ONLY a SINGLE valid JSON object (NOT an array) containing:
 
 CRITICAL INSTRUCTIONS TO PREVENT ERRORS:
 1. NEVER output a JSON array (e.g. do not wrap your object in [] and do not return an array of block objects). 
-2. If you are given a chunk of text that contains NO advert whatsoever (e.g. pure show content about a topic like a podcast sale), do not panic or break formatting. Calmly return a single JSON object with start_idx: -1 and end_idx: -1.
+2. If you are given a chunk of text that contains NO advert whatsoever (e.g. pure show content about a topic like a podcast sale or meta-discussion about advertising), do not panic or blindly return the context boundaries. Calmly return a single JSON object with start_idx: -1 and end_idx: -1.
+3. You MUST provide the "analysis" key with a step-by-step reasoning string before stating the start and end indices.
 
 Do not output any other text or format.""")

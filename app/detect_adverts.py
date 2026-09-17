@@ -743,8 +743,10 @@ def ask_boundary_verification(url, model, review_blocks):
                 raise ValueError(f"LLM returned a JSON array instead of an object (len={len(data)})")
                 
             analysis = data.get("analysis", "")
-            if analysis:
-                print(f"      [Boundary Verify] {analysis.strip()[:200]}")
+            if not analysis:
+                raise ValueError("JSON object is missing the required 'analysis' string.")
+            
+            print(f"      [Boundary Verify] {analysis.strip()[:200]}")
                 
             start_idx = data.get("start_idx")
             end_idx = data.get("end_idx")
