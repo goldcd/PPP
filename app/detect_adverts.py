@@ -244,21 +244,97 @@ def auto_heal_gaps(cleaned_topics, min_idx, max_idx):
         
     return cleaned_topics
 
+CATEGORY_MAP = {
+    # sponsor_read
+    "sponsor": "sponsor_read",
+    "sponsor_read": "sponsor_read",
+    "sponsorship": "sponsor_read",
+    "advert": "sponsor_read",
+    "advertisement": "sponsor_read",
+    "advertisements": "sponsor_read",
+    "advertising": "sponsor_read",
+    "ad": "sponsor_read",
+    "ads": "sponsor_read",
+    "commercial": "sponsor_read",
+    "commercials": "sponsor_read",
+    "paid_placement": "sponsor_read",
+    
+    # podcast_promotion
+    "podcast_promotion": "podcast_promotion",
+    "podcast_promo": "podcast_promotion",
+    "promo": "podcast_promotion",
+    "promos": "podcast_promotion",
+    "promotion": "podcast_promotion",
+    "promotions": "podcast_promotion",
+    "trailer": "podcast_promotion",
+    
+    # self_promotion
+    "self_promotion": "self_promotion",
+    "self_promo": "self_promotion",
+    "house_ad": "self_promotion",
+    
+    # intro_outro
+    "intro_outro": "intro_outro",
+    "intro": "intro_outro",
+    "outro": "intro_outro",
+    "introduction": "intro_outro",
+    "credits": "intro_outro",
+    "theme": "intro_outro",
+    
+    # show_content
+    "show_content": "show_content",
+    "show": "show_content",
+    "content": "show_content",
+    "break_announcement": "show_content",
+    "break_return": "show_content",
+    "conversation": "show_content",
+    "discussion": "show_content",
+    "interview": "show_content",
+    "segment": "show_content",
+}
+
+def normalize_category(cat_str, title_str=None):
+    if not cat_str:
+        if title_str:
+            t_lower = str(title_str).lower()
+            if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
+                return "sponsor_read"
+            if "podcast" in t_lower and "promo" in t_lower:
+                return "podcast_promotion"
+            if "self" in t_lower and "promo" in t_lower:
+                return "self_promotion"
+            if any(k in t_lower for k in ["intro", "outro"]):
+                return "intro_outro"
+        return "show_content"
+    cleaned = str(cat_str).lower().strip().replace("-", "_").replace(" ", "_")
+    if cleaned in CATEGORY_MAP:
+        res = CATEGORY_MAP[cleaned]
+        if res == "show_content" and title_str:
+            t_lower = str(title_str).lower()
+            if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
+                return "sponsor_read"
+        return res
+    if any(k in cleaned for k in ["sponsor", "advert", "commercial"]):
+        return "sponsor_read"
+    if "podcast" in cleaned and "promo" in cleaned:
+        return "podcast_promotion"
+    if "self" in cleaned and "promo" in cleaned:
+        return "self_promotion"
+    if any(k in cleaned for k in ["intro", "outro"]):
+        return "intro_outro"
+    if title_str:
+        t_lower = str(title_str).lower()
+        if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
+            return "sponsor_read"
+    return "show_content"
+
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
 def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_num=0):
-    ##Determine the start and end index of the blocks we're passing in
     valid_indices = {b['idx'] for b in blocks_subset}
-    ##Get the min and max of this set of indices
     min_idx = min(valid_indices)
     max_idx = max(valid_indices)
-    ##Combine the text of the blocks into a single string
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
-    
-    ##This request to map the segments into topics, is performing way way better than previous "take out the adverts!"
-    ##Also Qwen is a champion. Second time I've come back to her. My eye should never have wandered..
-    ##NOTE TO SELF - I think I should let people choose what topics they want taking out of the podcast. Should also split between self-promotion and podcast-promotion
-    
+    transcript_text = "\n\n".join(f"{b['idx']}\n{b['text']}" for b in blocks_subset)
 
     from app.prompts import PROMPT_V18_DIARIZED_MASTER
     sys_msg = PROMPT_V18_DIARIZED_MASTER
@@ -267,7 +343,11 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
         sys_msg += f"\nCRITICAL CONTEXT FROM PREVIOUS CHUNK:\n{previous_context}\n\n"
 
     # Format the user message to include the actual transcript subset being processed.
-    user_msg = f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\nPartition this transcript chronologically. Output ONLY a valid JSON object with the 'analysis' string and 'topics' array as specified in the instructions."
+    user_msg = (
+        f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\n"
+        "Partition this transcript chronologically. Output ONLY a valid JSON object with the 'analysis' string and 'topics' array. "
+        "Each topic object MUST include: 'title', 'start_idx', 'end_idx', 'category' (choose from: sponsor_read, show_content, podcast_promotion, self_promotion, intro_outro), and 'confidence'."
+    )
     if attempt_num > 0:
         user_msg += "\n\nCRITICAL WARNING: Your previous attempt failed. You MUST output an object with exactly two keys: 'analysis' and 'topics'. The 'topics' key MUST be a JSON array of objects. DO NOT output a dictionary for topics. DO NOT include subtopics, details, or raw text. Each topic object MUST have exactly: 'title', 'start_idx', 'end_idx', 'category', 'confidence'."
     
@@ -356,9 +436,8 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                 title = t.get("title") or t.get("topic") or t.get("name") or t.get("description") or t.get("content") or t.get("summary") or "Unknown"
                 if title == "Unknown":
                     print(f"\n  [DEBUG] Topic missing title key. Raw object: {t}")
-                category = t.get("category", "show_content")
-                
-
+                raw_cat = t.get("category") or t.get("type") or t.get("kind")
+                category = normalize_category(raw_cat, title)
                 
                 # Extract start and end indices, accounting for potential key name variations from the LLM
                 s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx") or t.get("start")
@@ -372,6 +451,12 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                     s_val = int(s_idx)
                     e_val = int(e_idx)
                     
+                    # Handle relative indices if LLM counted relative to chunk (e.g. 1..100)
+                    chunk_len = max_idx - min_idx + 1
+                    if min_idx > 50 and s_val < min_idx and e_val <= chunk_len + 5:
+                        s_val = min_idx + max(0, s_val - 1)
+                        e_val = min_idx + max(0, e_val - 1)
+
                     # Clamp the indices to ensure they fall within the bounds of the current chunk
                     s_val = max(min_idx, min(max_idx, s_val))
                     e_val = max(min_idx, min(max_idx, e_val))
@@ -388,7 +473,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                         "title": str(title),
                         "start_idx": s_val,
                         "end_idx": e_val,
-                        "category": str(category).lower(),
+                        "category": category,
                         "confidence": confidence
                     })
                 except (ValueError, TypeError):
@@ -564,11 +649,13 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
                 confidence = t.get("confidence", "certain")
                 if confidence not in ("certain", "likely", "uncertain"):
                     confidence = "certain"
+                raw_cat = t.get("category") or t.get("type") or t.get("kind")
+                category = normalize_category(raw_cat, t.get("title"))
                 cleaned.append({
                     "title": str(t.get("title", "Reviewed Segment")),
                     "start_idx": s_val,
                     "end_idx": e_val,
-                    "category": str(t.get("category", "show_content")).lower(),
+                    "category": category,
                     "confidence": confidence
                 })
             except (ValueError, TypeError):
@@ -996,10 +1083,13 @@ def detect_adverts(srt_file, raw_folder):
         for seg in adverts_to_verify:
             print(f"  Verifying boundaries for {seg['category']} at blocks {seg['start_idx']}–{seg['end_idx']}...")
             
-            # Context: 8 blocks before and after
-            context_start = max(1, seg['start_idx'] - 8)
-            max_available = max(blocks_map.keys()) if blocks_map else seg['end_idx'] + 8
-            context_end = min(max_available, seg['end_idx'] + 8)
+            # Context: 20 blocks before and after (at least up to block 35 for pre-roll to capture sponsor banter before show intro)
+            PADDING = 20
+            context_start = max(1, seg['start_idx'] - PADDING)
+            max_available = max(blocks_map.keys()) if blocks_map else seg['end_idx'] + PADDING
+            context_end = min(max_available, seg['end_idx'] + PADDING)
+            if seg['start_idx'] <= 10:
+                context_end = max(context_end, min(max_available, 35))
             
             review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
             
