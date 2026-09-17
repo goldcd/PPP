@@ -10,6 +10,7 @@ TEST_EPISODES = [
     ("013d87a2-2ddb-11f1-bfa6-67b3a0d22274.srt", "Octopus Hold Music Banter + Indeed"),
     ("03956556-47da-11f1-96ae-1314eccd0ce0.srt", "Lloyds + Drug Awareness + Big Arch"),
     ("04a69e1c-2136-11f1-81c3-730977a326a3.srt", "Bumble + Oscars Ad Discussion Guard"),
+    ("0b52f52e-2e9e-11f1-aed1-7f26b09f1089.srt", "Octopus + McDonald's Big Arch + Tesco Mobile"),
 ]
 
 def run_suite():
