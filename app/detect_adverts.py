@@ -364,6 +364,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                     {"role": "system", "content": sys_msg},
                     {"role": "user", "content": user_msg},
                 ],
+                "format": "json",
                 "stream": True,
                 "think": False,
                 "options": {
@@ -688,69 +689,83 @@ def ask_boundary_verification(url, model, review_blocks):
 
     user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nOutput JSON with exact start_idx and end_idx."
 
-    try:
-        r = requests.post(
-            url,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "stream": True,
-                "think": False,
-                "options": {
-                    "temperature": 0.0,
-                    "num_ctx": 8192,
-                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
-                }
-            },
-            stream=True,
-            timeout=180,
-        )
-        if r.status_code != 200:
-            return None
+    messages = [
+        {"role": "system", "content": sys_msg},
+        {"role": "user", "content": user_msg},
+    ]
 
-        raw_parts = []
-        for line in r.iter_lines():
-            if line:
-                try:
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        raw_parts.append(token)
-                    if chunk.get("done", False):
-                        break
-                except json.JSONDecodeError:
-                    pass
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.post(
+                url,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "format": "json",
+                    "stream": True,
+                    "think": False,
+                    "options": {
+                        "temperature": 0.0,
+                        "num_ctx": 8192,
+                        "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                    }
+                },
+                stream=True,
+                timeout=180,
+            )
+            if r.status_code != 200:
+                raise Exception(f"HTTP {r.status_code}")
 
-        raw = "".join(raw_parts).strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
+            raw_parts = []
+            for line in r.iter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line)
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            raw_parts.append(token)
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        pass
 
-        data = json.loads(raw)
-        if isinstance(data, list):
-            raise ValueError(f"LLM returned a JSON array instead of an object for boundary verification (len={len(data)})")
-        analysis = data.get("analysis", "")
-        if analysis:
-            print(f"      [Boundary Verify] {analysis.strip()[:200]}")
+            raw = "".join(raw_parts).strip()
+            messages.append({"role": "assistant", "content": raw})
             
-        start_idx = data.get("start_idx")
-        end_idx = data.get("end_idx")
-        
-        if start_idx is None or end_idx is None or start_idx == -1 or end_idx == -1:
-            return -1, -1
-            
-        start_idx = int(start_idx)
-        end_idx = int(end_idx)
-        
-        return start_idx, end_idx
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0].strip()
 
-    except Exception as e:
-        print(f"      [Boundary Verify Error] {e}")
-        return None
+            data = json.loads(raw)
+            if isinstance(data, list):
+                raise ValueError(f"LLM returned a JSON array instead of an object (len={len(data)})")
+                
+            analysis = data.get("analysis", "")
+            if analysis:
+                print(f"      [Boundary Verify] {analysis.strip()[:200]}")
+                
+            start_idx = data.get("start_idx")
+            end_idx = data.get("end_idx")
+            
+            if start_idx is None or end_idx is None or start_idx == -1 or end_idx == -1:
+                return -1, -1
+                
+            start_idx = int(start_idx)
+            end_idx = int(end_idx)
+            
+            return start_idx, end_idx
+
+        except Exception as e:
+            print(f"      [Boundary Verify Error] {e}")
+            if attempt < max_retries:
+                messages.append({"role": "user", "content": f"Your last response failed with error: {e}. Please try again and strictly follow the JSON object OUTPUT FORMAT."})
+                print(f"      [Boundary Verify Retry {attempt+1}/{max_retries}]")
+                import time
+                time.sleep(1)
+            else:
+                return None
 
 def detect_adverts(srt_file, raw_folder):
     global ollama_url, model_to_use
@@ -1102,16 +1117,8 @@ def detect_adverts(srt_file, raw_folder):
                 context_end = max(context_end, min(max_available, 35))
             
             review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
+            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
             
-            max_retries = 3
-            new_bounds = None
-            for attempt in range(max_retries):
-                new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
-                if new_bounds is not None:
-                    break
-                print(f"      [Boundary Verify Retry {attempt+1}/{max_retries}]")
-                import time
-                time.sleep(3)
             if new_bounds:
                 new_start, new_end = new_bounds
                 if new_start == -1 and new_end == -1:
