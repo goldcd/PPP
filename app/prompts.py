@@ -69,6 +69,12 @@ CRITICAL OUTPUT INSTRUCTIONS:
 
 12. SPONSOR NAME RE-MENTION (CLOSED SANDWICH): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, this is a "closed sandwich". The ENTIRE block of conversation between the two sponsor mentions is part of the `sponsor_read`. Treat the whole segment as one continuous advert topic, regardless of how long it is.
 
+13. META-DISCUSSION OF SPONSORSHIP (CRITICAL ANTI-FALSE-POSITIVE RULE): If hosts are discussing sponsorships, advertising deals, or brand names as a TOPIC OF CONVERSATION — rather than actively pitching a product to the listener — this is `show_content`, NOT `sponsor_read`. For example:
+   - Hosts discussing how much revenue another podcast earns from its sponsors, or listing who those sponsors are (e.g. "They've got RAMP, Plaid, Google Gemini as sponsors, and they're on track for $30 million").
+   - Hosts analysing the business model or commercial deals of another company, person, or media outlet.
+   - Hosts commenting on the podcast industry's advertising ecosystem or sponsor relationships in general.
+   - A key test: ask whether the hosts are trying to SELL the listener something, or merely TALKING ABOUT selling as a news/editorial topic. If they are narrating or analysing, it is `show_content`.
+
 EXAMPLE OF CORRECT CHUNKING:
 [1] [SPEAKER_01 | Vol: -15.0dB | CPS: 20 | Brightness: 1400Hz] The Rest is Entertainment is presented by Octopus Energy.
 [2] [SPEAKER_00 | Vol: -16.0dB | CPS: 18 | Brightness: 1300Hz] Now, can I tell you about their customer service?
@@ -122,27 +128,32 @@ FINAL REMINDER: You MUST output a single valid JSON object containing an "analys
 ''')
 
 PROMPT_BOUNDARY_VERIFICATION = repr("""You are a precise podcast advert boundary verifier.
-Your job is to read the provided transcript blocks and determine the EXACT start block and EXACT end block of the actual advert.
+Your job is to read the provided transcript blocks and determine the EXACT start block and EXACT end block of the commercial break or advert segment.
 
 RULES:
-1. Advert Start: Look for the explicit sponsor pitch or a break announcement immediately leading into the pitch. If the transcript begins with regular show conversation (e.g. hosts chatting about movies, news, answering questions), cut it out. The advert starts at the break transition or commercial pitch.
-2. Open Sandwich: If the hosts tell a personal story that seamlessly transitions into pitching a product (a fake organic lead-in) WITHOUT any break announcement, the story IS part of the advert. However, if there was an explicit break announcement or the preceding conversation is unrelated show discussion, cut it out.
-3. Advert End & Sponsor Banter: Ensure all legal disclaimers, URLs, and post-ad sponsor banter are included. If the hosts continue discussing or joking about the sponsor or the sponsor's features (such as hold music, free service, prizes, or customer service), this banter IS part of the advert.
-4. Pre-roll Adverts: For pre-roll adverts at the start of an episode, the advert and its banter continue all the way until the show's theme music [MUSIC/NOISE] or formal greeting (e.g. "Hello and welcome to the show...").
-5. If you cannot find any advert at all, return start_idx: -1 and end_idx: -1.
+1. Commercial Break Scope: An advert break or pre-roll often contains MULTIPLE consecutive adverts, sponsor reads, or commercials back-to-back (e.g. an Octopus Energy sponsor read immediately followed by a McDonald's or Big Arch commercial, or multiple sponsor pitches in a row). You MUST include ALL consecutive adverts, sponsor reads, commercial pitches, and related sponsor banter in the break. The break ONLY ends when regular show content actually begins or resumes. While this often involves a formal greeting (e.g. "Welcome back..."), sometimes the show resumes seamlessly without any greeting. If the hosts simply start discussing a regular show topic, answering questions, or discussing news, the break has ended. Never cut off the break early if another advert or commercial immediately follows it!
+2. Advert Start: Look for the explicit sponsor pitch or a break announcement immediately leading into the pitch. If the transcript begins with regular show conversation (e.g. hosts chatting about movies, news, answering questions), cut it out. The advert starts at the break transition or commercial pitch.
+3. Open Sandwich: If the hosts tell a personal story that seamlessly transitions into pitching a product (a fake organic lead-in) WITHOUT any break announcement, the story IS part of the advert. However, if there was an explicit break announcement or the preceding conversation is unrelated show discussion, cut it out.
+4. Advert End, Disclaimers & Closing Stingers: Ensure all legal disclaimers, dates, availability terms, URLs, and post-ad sponsor banter are included. Legal disclaimers (e.g. 'subject to availability', dates, terms) often follow a brief chime or [MUSIC/NOISE]. The break continues through these disclaimers and any closing [MUSIC/NOISE] stinger right up until the show greeting begins (e.g. 'Hello and welcome...').
+5. Pre-roll Adverts: For pre-roll adverts at the start of an episode, all consecutive adverts, disclaimers, and closing stingers continue all the way until the show's formal greeting (e.g. "Hello and welcome to the show...").
+6. If you cannot find any advert at all, return start_idx: -1 and end_idx: -1.
+7. META-DISCUSSION IS NOT AN ADVERT: If the hosts are discussing sponsorships, advertising revenue, or brand names as a TOPIC OF CONVERSATION (e.g. analysing how much another podcast earns from its sponsors, listing who sponsors a competitor show, or discussing the economics of podcast advertising), this is regular show content — NOT a commercial break. A key test: are the hosts trying to SELL the listener something right now? If not — if they are narrating, analysing, or editorialising about sponsorship as a subject — return start_idx: -1 and end_idx: -1.
 
-EXAMPLE 1 (Pre-roll Ad with Sponsor Banter):
+EXAMPLE 1 (Pre-roll with Multiple Consecutive Adverts & Legal Disclaimer):
 [1] The show is presented by Octopus Energy.
 [2] Can I tell you about their hold music?
 [3] It is hilarious, they play your number one single.
 [4] What monsters don't choose to listen to that?
-[5] [MUSIC/NOISE]
-[6] Hello and welcome to the show!
+[5] The Big Arch just got bacon. More crispiness, more deliciousness.
+[6] [MUSIC/NOISE]
+[7] Subject to availability, from 11am.
+[8] [MUSIC/NOISE]
+[9] Hello and welcome to the show!
 Expected JSON:
 {
-  "analysis": "The pre-roll ad and hold music banter run from block 1 through block 4 until the theme music at block 5 and show greeting at block 6.",
+  "analysis": "The pre-roll commercial break includes the Octopus Energy read and banter, followed by the Big Arch commercial, its legal disclaimer at block 7, and the closing stinger at block 8. The commercial break runs from block 1 through block 8 until the show greeting at block 9.",
   "start_idx": 1,
-  "end_idx": 4
+  "end_idx": 8
 }
 
 EXAMPLE 2 (Mid-roll Ad after Break Call):
@@ -161,9 +172,9 @@ Expected JSON:
 }
 
 OUTPUT FORMAT:
-You MUST output ONLY a valid JSON object containing:
-- "analysis": A brief explanation of exactly where the show content ends, where the advert begins, and where it ends.
-- "start_idx": The exact integer block index where the advert begins.
-- "end_idx": The exact integer block index where the advert ends.
+You MUST output ONLY a SINGLE valid JSON object (NOT an array) containing:
+- "analysis": A brief explanation of where regular show content ends, where the commercial break begins, and where it ends.
+- "start_idx": The exact integer block index where the advert/break begins.
+- "end_idx": The exact integer block index where the advert/break ends.
 
 Do not output any other text or format.""")

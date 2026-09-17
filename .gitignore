@@ -19,3 +19,5 @@ test_detect.py
 scratch_ad_analysis.py
 scratch_test_new_prompt.py
 app/prompts.py
+batch_eval_suite.py
+scratch_check_ranges.py

@@ -731,6 +731,8 @@ def ask_boundary_verification(url, model, review_blocks):
             raw = raw.split("```")[1].split("```")[0].strip()
 
         data = json.loads(raw)
+        if isinstance(data, list):
+            raise ValueError(f"LLM returned a JSON array instead of an object for boundary verification (len={len(data)})")
         analysis = data.get("analysis", "")
         if analysis:
             print(f"      [Boundary Verify] {analysis.strip()[:200]}")
@@ -1066,10 +1068,18 @@ def detect_adverts(srt_file, raw_folder):
     # --- THIRD PASS: Boundary Verification for Adverts ---
     print("\n--- Third Pass: Boundary Verification for Adverts ---")
     
+    # Group contiguous or adjacent ad segments into unified commercial break clusters
     adverts_to_verify = []
     for seg in clean_topics:
         if seg['category'] in AD_CATEGORIES:
-            adverts_to_verify.append(seg)
+            if adverts_to_verify and seg['start_idx'] <= adverts_to_verify[-1]['end_idx'] + 2:
+                # Merge into existing commercial break cluster
+                adverts_to_verify[-1]['end_idx'] = max(adverts_to_verify[-1]['end_idx'], seg['end_idx'])
+                if seg['category'] == 'sponsor_read':
+                    adverts_to_verify[-1]['category'] = 'sponsor_read'
+                adverts_to_verify[-1]['title'] = f"{adverts_to_verify[-1]['title']} / {seg['title']}"
+            else:
+                adverts_to_verify.append(dict(seg))
             
     if adverts_to_verify:
         print(f"  Found {len(adverts_to_verify)} advert(s) for boundary verification.")
@@ -1093,7 +1103,15 @@ def detect_adverts(srt_file, raw_folder):
             
             review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
             
-            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
+            max_retries = 3
+            new_bounds = None
+            for attempt in range(max_retries):
+                new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
+                if new_bounds is not None:
+                    break
+                print(f"      [Boundary Verify Retry {attempt+1}/{max_retries}]")
+                import time
+                time.sleep(3)
             if new_bounds:
                 new_start, new_end = new_bounds
                 if new_start == -1 and new_end == -1:
