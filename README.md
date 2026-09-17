@@ -1,5 +1,11 @@
 # Perfect Podcast Proxy
 
+## Version
+- 2.0
+  - Upgraded transcription to include diarization (WhisperX + pyannote)
+  - Upgraded to three-pass advert dection, dramatically improving accuracy
+  - I might be done with this. I think this is the best we can get locally
+
 ## Purpose
 
 Provide a proxy for your podcasts - with the adverts removed.
@@ -13,9 +19,6 @@ The current scope is to:
 - Trigger a local download of this feed (defaults to last 7 days of episodes)
 - Generate an SRT transcription of each episode
 - Parse transcription to detect advert
-  - Firstly detect the thematic segments within the podcast
-  - Apply rules/weightings to segments, based on user config/preferences
-  - Generate SRT of content to be removed
 - Generate a 'cleaned' version of the podcast with these segments excised
 - Optionally output a web page with modified feeds and podcasts, allowing you to subscribe to them however you normally do
 - Includes basic logging and stat generation
@@ -27,6 +30,7 @@ The current scope is to:
 - nVidia GPU ideally, but should fall back to CPU 
   - e2e processing on GPU ~ 15x on GPU, 3x on CPU (Apple should be faster, but not tried)
 - Ollama
+- Requires HuggingFace API token for transcription (see config.toml)
 
 
 ## Usage
@@ -37,7 +41,7 @@ The current scope is to:
   - Defaults lookback period to 7 days (can change this in config)
 - "Manage Podcast Processing"
   - Download
-    - Retrieves latest version of public RSS feed to `data\<podcast>\raw`
+    - Retrieves latest version of public RSS feed to `data/<podcast>/raw`
     - Downloads podcast mp3s (unless older than lookback or already downloaded)
   - Transcribe 
     - Generates ,srt transcription in data\<podcast id> for all podcasts without one
@@ -49,9 +53,26 @@ The current scope is to:
     - Configurable Pop can be inserted where content was removed
   - Export Podcast
     - Copies processed files to a web-accessible directory
-    - Generates a cleaned RSS feed that can be subscribed to, via landing page (or by copying the RSS link, if that doesn't work)
+    - Generates a cleaned RSS feed that can be subscribed to, via landing page (or by copying the RSS link, if that doesn't work). Cleaned feed removes metadata and adds "PPP" prefix to podcast (prevents some podcast apps deciding to helpfully grab the un-cleaned feed, rather than the one you provided)
 - "Trigger All Podcast Processing"
   - Executes all of the "Manage Podcast Processing" options in order
+
+## State Logic
+
+- Logic flow is determine by presence of files, so I'll just explain that here (maybe I'll do this properly later, but probably not)
+- Nothing is ever automatically deleted
+- When adding a podcast, this is added to /data/feeds.json and defaults to 7 days back as download limit (can be changed at any time)
+- Downloaded Podcasts are placed in /data/<podcast>/raw
+  - Download is skipped, if file already exists
+  - Following download, feeds.json is updated with current timestamp, so this podcast won't be re-downloaded (unless manually push back the timestamp)
+- Transcription creates .srt file for each podcast in raw folder
+  - Transcription is skipped, if .srt exists for the podcast
+- Ad-detection creates another sibling with .ad extension
+  - Ad-detection is skipped, if .ad exists for the podcast
+  - .ad contains the portion of the SRT marked for excision (i.e. diff the .ad and .srt, to see what's being retained)
+- Cleaned Podcast is written to /data/<podcast>/output
+  - If it doesn't already exist in /output
+- i.e. Unless you're ever wanting to re-process - you can delete the /raw folders to save space. 
   
   
 ## Example
@@ -131,19 +152,5 @@ Start  | End    | Duration | Category           | Score | Title
 ----------------------------------------------------------------------------------------------------
 ```
 
-## Todo
-- Add debug
-- Re-implement the post LLM weighting - currently not actually doing much of use (also, make it review the actual transcript, rather than the summary)
-- Re-factor ad-detection as a whole. Too much of AI prototype still in there
-- Clean up export. Add new export mechanisms (FTP etc) and see if any serverless options available (google drive is a no, but must be alternatives)
-  - Actually - for another project, I wonder if you could create a server that feeds from anybody's google drive?
-  - Share path with server, then just proxy this through HTTP server with stuff like PHP, python etc running on it.
-- Export is run excessively - seem to always be pushing RSS
-- Refactor code to APIs, then restore current functionality with wrappers.
-- More lights-out
-- Dockerization
-  - Maybe with support to push processing to other machine
-  - i.e. I want to run container on my NAS to push feeds and detect new podcasts, but offload processing to my desktop if it's on.
-  - You've got the http/messaging module - so maybe nice project.
-- Currently no mechanism to manage downloaded podcasts - they'll just accumulate over time. Probably the next feature. 
+
 
