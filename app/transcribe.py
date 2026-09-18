@@ -27,6 +27,34 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as toml
 
+import platform
+
+_standby_prevent_count = 0
+_wakepy_keep_running = None
+
+def prevent_standby():
+    """Prevents the system from going into standby mode."""
+    global _standby_prevent_count, _wakepy_keep_running
+    if _standby_prevent_count == 0:
+        try:
+            from wakepy import keep
+            _wakepy_keep_running = keep.running()
+            _wakepy_keep_running.__enter__()
+        except Exception as e:
+            print(f"Warning: Failed to prevent standby. Is wakepy installed? ({e})")
+    _standby_prevent_count += 1
+
+def allow_standby():
+    """Allows the system to go into standby mode."""
+    global _standby_prevent_count, _wakepy_keep_running
+    _standby_prevent_count = max(0, _standby_prevent_count - 1)
+    if _standby_prevent_count == 0 and _wakepy_keep_running is not None:
+        try:
+            _wakepy_keep_running.__exit__(None, None, None)
+            _wakepy_keep_running = None
+        except Exception as e:
+            print(f"Warning: Failed to allow standby ({e})")
+
 ##Slopped function to convert time to convert seconts to the format I want to put into my SRT files: HH:MM:SS,mmm
 def format_srt_time(seconds):
     hours = int(seconds // 3600)
@@ -74,10 +102,12 @@ def calculate_spectral_centroid(audio_array, start_time, end_time, sample_rate=1
 
 def transcribe_all():
     print("\nTranscribing!\n")
+    prevent_standby()
 
     # If the data path doesn't exist, then tell the user they need to add some podcasts
     if not os.path.exists("data"):
         print("No data folder found. Add some podcasts and try again")
+        allow_standby()
         return
     
     ## Gather all files that need transcribing
@@ -94,6 +124,7 @@ def transcribe_all():
                             files_to_transcribe.append((mp3_file, raw_folder))
 
     if not files_to_transcribe:
+        allow_standby()
         return
 
     import torch
@@ -116,6 +147,7 @@ def transcribe_all():
     hf_token = config.get("huggingface", {}).get("hf_token", "")
     if not hf_token:
         print("\n ERROR: No hf_token provided in config.toml! Cannot run Pyannote diarization. \n")
+        allow_standby()
         return
         
     model_to_use = config["transcribe"]["model_to_use"]
@@ -128,6 +160,7 @@ def transcribe_all():
         diarize_model = DiarizationPipeline(token=hf_token, device=device)
     except Exception as e:
         print(f"\n Error authenticating with Hugging Face: {e}\n")
+        allow_standby()
         return
 
     # Process all files
@@ -142,6 +175,8 @@ def transcribe_all():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    
+    allow_standby()
 
 #I'm very proud of myself. I've actually separated out the logic here from the front end. Well done me!
 def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None):
@@ -149,6 +184,8 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
     import torch
     import whisperx
     from whisperx.diarize import DiarizationPipeline
+    
+    prevent_standby()
     
     print(f"\nNow transcribing {mp3_file} in {raw_folder}")
 
@@ -180,6 +217,7 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
         hf_token = config.get("huggingface", {}).get("hf_token", "")
         if not hf_token:
             print("\n ERROR: No hf_token provided in config.toml! Cannot run Pyannote diarization. \n")
+            allow_standby()
             return
             
         model = whisperx.load_model(model_to_use, device, compute_type=compute_type)
@@ -187,6 +225,7 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
             diarize_model = DiarizationPipeline(token=hf_token, device=device)
         except Exception as e:
             print(f"\n Error authenticating with Hugging Face: {e}\n")
+            allow_standby()
             return
     
     ##Transcribe the podcast!!
@@ -268,5 +307,5 @@ def transcribe(mp3_file, raw_folder, model=None, diarize_model=None, device=None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()    
     
-    
-    
+    allow_standby()
+    

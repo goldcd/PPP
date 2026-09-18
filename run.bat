@@ -7,7 +7,7 @@ if not exist .venv (
     
     echo Activating environment and installing requirements...
     call .venv\Scripts\activate.bat
-    pip install torch faster-whisper requests tomli
+    pip install torch faster-whisper requests tomli wakepy
 ) else (
     call .venv\Scripts\activate.bat
 )
