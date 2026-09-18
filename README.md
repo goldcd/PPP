@@ -44,7 +44,7 @@ The current scope is to:
     - Retrieves latest version of public RSS feed to `data/<podcast>/raw`
     - Downloads podcast mp3s (unless older than lookback or already downloaded)
   - Transcribe 
-    - Generates ,srt transcription in data\<podcast id> for all podcasts without one
+    - Generates .srt transcription in data\<podcast id> for all podcasts without one
   - Detect Adverts
     - Scans transcription for adverts and generates SRT of their placement
     - Types of content you want to remove/retain can be specified in config
