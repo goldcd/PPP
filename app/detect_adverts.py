@@ -370,6 +370,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                 "options": {
                     "temperature": current_temperature,
                     "num_ctx": 8192,
+                    "num_predict": 2000,
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
             },
@@ -600,6 +601,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
                 "options": {
                     "temperature": 0.0,
                     "num_ctx": 8192,  # more room for reasoning tokens
+                    "num_predict": 2000,
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
             },
@@ -708,6 +710,7 @@ def ask_boundary_verification(url, model, review_blocks):
                     "options": {
                         "temperature": 0.0,
                         "num_ctx": 8192,
+                        "num_predict": 2000,
                         "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                     }
                 },
