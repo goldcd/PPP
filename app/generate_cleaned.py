@@ -310,14 +310,19 @@ def generate_cleaned(podcast_path, output_folder, filename):
         except Exception as e:
             print(f"Failed to read config.toml: {e}")
 
+    # Minimum duration (seconds) for a 'keep' segment - avoids corrupt tiny MP3 extracts
+    MIN_KEEP_DURATION = 1.0
+
     # Build the playlist of kept segments and pops
     playlist = []
     current_time = 0.0
 
     for start_sec, end_sec in cut_seconds:
         if start_sec > current_time:
-            # Add kept segment
-            playlist.append(('keep', current_time, start_sec))
+            # Only add the kept segment if it's long enough to produce a valid MP3
+            segment_duration = start_sec - current_time
+            if segment_duration >= MIN_KEEP_DURATION:
+                playlist.append(('keep', current_time, start_sec))
             # Since we are about to cut an ad, insert a pop (if enabled)
             if insert_pop:
                 playlist.append(('pop', None, None))
@@ -378,13 +383,12 @@ def generate_cleaned(podcast_path, output_folder, filename):
                     try:
                         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         temp_files.append(temp_mp3)
-                        escaped_path = temp_mp3.replace('\\', '/')
-                        f.write(f"file '{escaped_path}'\n")
+                        # Use the raw OS path (backslashes on Windows) - FFmpeg 8.x rejects forward slashes in concat files on Windows
+                        f.write(f"file '{temp_mp3}'\n")
                     except subprocess.CalledProcessError as e:
                         print(f"Error extracting part {i}: {e}")
                 elif p_type == 'pop' and pop_file_path:
-                    escaped_pop = pop_file_path.replace('\\', '/')
-                    f.write(f"file '{escaped_pop}'\n")
+                    f.write(f"file '{pop_file_path}'\n")
 
         # Now concatenate the extracted parts
         if temp_files:
