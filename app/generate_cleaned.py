@@ -63,6 +63,8 @@ def generate_all_cleaned():
             os.makedirs(output_folder, exist_ok=True)
             
             ##Then if we have an mp3 and ad pair (i.e. we've transcribed and then ad-detected the podcast)
+            if not os.path.exists(raw_folder):
+                continue
             for filename in os.listdir(raw_folder):
                 if filename.endswith(".mp3"):
                     base_name = os.path.splitext(filename)[0]
