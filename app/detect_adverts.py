@@ -294,26 +294,23 @@ CATEGORY_MAP = {
 }
 
 def normalize_category(cat_str, title_str=None):
+    """
+    FIX-3: title-keyword override removed.
+    The old code promoted any show_content topic with 'sponsor/advert/commercial'
+    in its title to sponsor_read, defeating Rule 13 (meta-discussion guard).
+    Now category string alone drives the decision.
+    """
     if not cat_str:
         if title_str:
             t_lower = str(title_str).lower()
-            if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
+            if any(k in t_lower for k in ["sponsor_read", "advert_break"]):
                 return "sponsor_read"
-            if "podcast" in t_lower and "promo" in t_lower:
+            if "podcast_promotion" in t_lower:
                 return "podcast_promotion"
-            if "self" in t_lower and "promo" in t_lower:
-                return "self_promotion"
-            if any(k in t_lower for k in ["intro", "outro"]):
-                return "intro_outro"
         return "show_content"
     cleaned = str(cat_str).lower().strip().replace("-", "_").replace(" ", "_")
     if cleaned in CATEGORY_MAP:
-        res = CATEGORY_MAP[cleaned]
-        if res == "show_content" and title_str:
-            t_lower = str(title_str).lower()
-            if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
-                return "sponsor_read"
-        return res
+        return CATEGORY_MAP[cleaned]   # FIX-3: no title override after lookup
     if any(k in cleaned for k in ["sponsor", "advert", "commercial"]):
         return "sponsor_read"
     if "podcast" in cleaned and "promo" in cleaned:
@@ -322,25 +319,26 @@ def normalize_category(cat_str, title_str=None):
         return "self_promotion"
     if any(k in cleaned for k in ["intro", "outro"]):
         return "intro_outro"
-    if title_str:
-        t_lower = str(title_str).lower()
-        if any(k in t_lower for k in ["sponsor", "advert", "commercial"]):
-            return "sponsor_read"
     return "show_content"
 
 ## Function to take in the list of block dictionaries, and give us our first idea of segments
 ##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
 def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_num=0):
+    """
+    FIX-2: transcript sent as "[idx] text" per line (matches prompt description).
+    FIX-5: num_ctx raised to 12288.
+    """
     valid_indices = {b['idx'] for b in blocks_subset}
     min_idx = min(valid_indices)
     max_idx = max(valid_indices)
-    transcript_text = "\n\n".join(f"{b['idx']}\n{b['text']}" for b in blocks_subset)
+    # FIX-2: use [idx] prefix on every line
+    transcript_text = "\n".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
 
     from app.prompts import PROMPT_V18_DIARIZED_MASTER
     sys_msg = PROMPT_V18_DIARIZED_MASTER
     
     if previous_context:
-        sys_msg += f"\nCRITICAL CONTEXT FROM PREVIOUS CHUNK:\n{previous_context}\n\n"
+        sys_msg += f"\n{previous_context}\n\n"
 
     # Format the user message to include the actual transcript subset being processed.
     user_msg = (
@@ -369,7 +367,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
                 "think": False,
                 "options": {
                     "temperature": current_temperature,
-                    "num_ctx": 8192,
+                    "num_ctx": 12288,   # FIX-5: raised from 8192
                     "num_predict": 2000,
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
@@ -600,7 +598,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
                 "think": False,  # Changed to False to prevent infinite generation loops on Qwen3
                 "options": {
                     "temperature": 0.0,
-                    "num_ctx": 8192,  # more room for reasoning tokens
+                    "num_ctx": 12288,  # FIX-5: raised from 8192
                     "num_predict": 2000,
                     "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                 }
@@ -815,8 +813,8 @@ def detect_adverts(srt_file, raw_folder):
     ##Should add this to config - currently hardcoded here for now
     ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
     total = len(blocks)
-    chunk_size = 100
-    overlap = 20
+    chunk_size = 75   # FIX-7: reduced from 100 (better focus per chunk)
+    overlap = 40      # FIX-7: increased from 20 (more context at boundaries)
 
     # --- TOPIC MAPPING ---
     print("\n--- Topic Mapping & Classification ---")
@@ -844,23 +842,37 @@ def detect_adverts(srt_file, raw_folder):
                 time.sleep(3)
                 
         if found is not None:
+            # FIX-8: Silent-failure detection guard.
+            # If the returned topics cover <50% of the chunk's block range, the model
+            # likely silently dropped content (context overflow / truncation). Force retry.
+            chunk_min = chunk[0]['idx']
+            chunk_max = chunk[-1]['idx']
+            chunk_range = chunk_max - chunk_min + 1
+            covered_min = min(t['start_idx'] for t in found)
+            covered_max = max(t['end_idx'] for t in found)
+            covered_range = covered_max - covered_min + 1
+            coverage_ratio = covered_range / chunk_range if chunk_range > 0 else 1.0
+            if coverage_ratio < 0.50:
+                print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation — forcing retry.", end=" ", flush=True)
+                found = None  # treat as failure so retry logic fires
+
+        if found is not None:
             print(f"Identified {len(found)} topic segments.")
             all_topics.extend(found)
-            if len(found) > 0:
-                last_topic = found[-1]
-                # Only pass context forward when it's at an interesting boundary.
-                # If the chunk ended on plain show_content, passing that context forward
-                # just primes the next chunk to also expect show_content, causing laziness.
-                # Context is only valuable when an advert or special segment may spill over.
-                # We do NOT pass self_promotion context forward: self_promotions are typically
-                # short and self-contained. Passing them forward causes the LLM to misclassify
-                # the opening blocks of the next chunk (e.g. a Lloyds ad) as continued self_promotion.
-                if last_topic['category'] in ('sponsor_read', 'podcast_promotion', 'intro_outro'):
-                    previous_context = f"The previous chunk ended with a topic titled '{last_topic['title']}' categorized as '{last_topic['category']}' which ended at block {last_topic['end_idx']}. Use this context to determine if the first few blocks of this current chunk continue that topic or start a new one."
-                else:
-                    previous_context = None
-            else:
-                previous_context = None
+            # FIX-9: Structured JSON handoff replaces freeform text summary.
+            # Pass the last 3 topics as a machine-readable JSON block so the model
+            # has an unambiguous signal when we are still inside a sponsor read.
+            handoff_topics = found[-3:]
+            previous_context = (
+                "CONTEXT FROM PREVIOUS CHUNK (last topics):\n"
+                + json.dumps([
+                    {"title": t["title"], "start_idx": t["start_idx"],
+                     "end_idx": t["end_idx"], "category": t["category"]}
+                    for t in handoff_topics
+                ], indent=2)
+                + "\nThe final topic above may be ongoing — if the first blocks of THIS chunk "
+                  "are a continuation of it, extend that topic rather than starting a new one."
+            )
         else:
             print("Failed. Skipping this chunk.")
             previous_context = None
@@ -902,6 +914,7 @@ def detect_adverts(srt_file, raw_folder):
                     "end_idx": current_end,
                     "category": current_topic_ref["category"],
                     "title": current_topic_ref["title"],
+                    "confidence": current_topic_ref.get("confidence", "certain"),  # FIX-4
                     "is_flagged": current_flagged
                 })
                 current_topic_ref = t_ref
@@ -914,6 +927,7 @@ def detect_adverts(srt_file, raw_folder):
             "end_idx": current_end,
             "category": current_topic_ref["category"],
             "title": current_topic_ref["title"],
+            "confidence": current_topic_ref.get("confidence", "certain"),  # FIX-4
             "is_flagged": current_flagged
         })
 

@@ -1,62 +1,82 @@
 # PPP Ad-Detection Optimization - Handoff Notes
 
-## Current State
-- The test_detect.py harness has been fully updated with the 7 critical fixes:
-  1. repr() removed from prompts (real newlines now sent to the model)
-  2. Transcript input format fixed to [{idx}] {text} to match the prompt's instructions
-  3. normalize_category title-keyword override removed (protects meta-discussion, Rule 13)
-  4. Confidence scores are now propagated correctly during chunk reconciliation
-  5. num_ctx raised to 12288 to prevent truncation
-  6. Boundary prompt Example 2 corrected (break announcements = show_content per Rule 1)
-  7. Parallel execution removed in favor of sequential chunking with previous_context forwarding.
-- A new scoring framework is built directly into test_detect.py.
-- The prompts are now defined inline in test_detect.py.
+## Current State (as of 2026-09-26 ~02:00)
 
-## Full Run Results (122 episodes)
-- Test harness avg F1:  **0.759**
-- Baseline (prod) avg F1: **0.734**
-- Delta: **+0.026** (improved=51, neutral=28, regressed=43)
+### Fixes applied to `tests/test_detect.py`
+All 10 fixes are now in the file:
+  - FIX-1  repr() removed from prompts
+  - FIX-2  Pass-1 format: "[idx] text"
+  - FIX-3  normalize_category: title-keyword override removed (Rule 13)
+  - FIX-4  Confidence propagated through reconciliation
+  - FIX-5  num_ctx raised 8192->12288
+  - FIX-6  Boundary prompt Example 2 corrected
+  - FIX-7  Sequential processing with previous_context forwarding
+  - FIX-8  **NEW** Silent-failure guard: <50% coverage forces a retry
+  - FIX-9  **NEW** Structured JSON previous_context (last 3 topics) replaces freeform text
+  - FIX-10 **NEW** Rule 11 (metadata clue instructions) removed (~200 token saving)
 
-Full per-episode table is in the most recent log: `logs/test_detect_20260924_212301.log`
+### Test Run Status — INCOMPLETE (killed overnight to save power)
+- Run was started fresh (all old `.test.ad` files deleted before starting)
+- **103 of 122 episodes** completed before being stopped
+- **19 episodes** still have no `.test.ad` file and need reprocessing
 
-## Regression Analysis
-A full analysis of the 43 regressions was done and is saved at:
-`C:\Users\james\.gemini\antigravity-ide\brain\cf87d5d1-e25f-4bc0-a09a-99c8f2b188dc\regression_analysis.md`
+### Partial Score (103 episodes)
+| Metric | Value |
+|---|---|
+| Test harness avg F1 | **0.839** |
+| Previous run avg F1 | 0.759 |
+| Prod baseline avg F1 | 0.734 |
+| Delta vs previous | **+0.080** |
+| Improved | 57 |
+| Neutral | 23 |
+| Regressed | 23 |
 
-**Root cause summary:**
-- The problem is overwhelmingly **recall** (missed ads), not precision.
-- 26/43 regressions are under-detection; only 5 are over-detection.
-- Three patterns account for almost all regressions:
-  1. Long sponsor reads where the START is missed but the END is found — caused by the freeform `previous_context` summary failing to convey "we are still inside an ad" to the next chunk.
-  2. Complete misses of obvious mid-roll breaks — likely silent truncation/context-overflow failures in specific chunks.
-  3. Minor 1-3 block boundary errors (normal LLM imprecision).
+Well above the 0.80 merge threshold — looking very promising.
+
+---
 
 ## Plan for Tomorrow
 
-### Step 1 — Fix the `previous_context` handoff (HIGHEST PRIORITY)
-**Problem:** The current handoff between chunks is a freeform LLM-written text summary. The model sometimes fails to convey "we are mid-sponsor-read" clearly enough for the next chunk.
-**Fix:** Replace the freeform summary with a **structured JSON block** of the last 2-3 topic objects from chunk N. If the final topic in chunk N was `sponsor_read`, the next chunk's model has an unambiguous machine-readable signal.
-- In `ask_phase1_topics()`: instead of appending `previous_context` as raw text, format it as:
-  ```
-  CONTEXT FROM PREVIOUS CHUNK (last topics):
-  [{"title": "...", "start_idx": X, "end_idx": Y, "category": "sponsor_read"}, ...]
-  The final topic may be ongoing — if the first blocks of THIS chunk are a continuation, extend it.
-  ```
-- This is a simplification (removes LLM creativity from the handoff path).
+### Step 1 — Complete the test run (FIRST THING)
+The script skips episodes that already have a `.test.ad`, so just re-run and it picks up the remaining 19:
+```
+python tests/test_detect.py
+```
+Should take ~1.5–2 hours.
 
-### Step 2 — Remove Rule 11 (Vol/CPS/Brightness metadata guidance) from the prompt
-**Problem:** Rule 11 is ~200 tokens of prompt explaining how to use audio metadata. Analysis of regressions shows zero cases where metadata misinterpretation caused the failure — all failures are chunking/structural.
-**Fix:** Delete Rule 11 from `PROMPT_V18_DIARIZED_MASTER`. The metadata is still in the transcript text; the model can still use it, but we don't need to spend prompt budget on instructions for it. Shorter prompt = more context window for actual transcript.
+### Step 2 — Score the full 122 episodes
+```
+python tests/test_detect.py --score-only
+```
 
-### Step 3 — Add a silent-failure detection guard
-**Problem:** Several "0 detection" regressions suggest the model silently dropped topics for the latter half of a chunk (returned some topics but far fewer than expected).
-**Fix:** After `ask_phase1_topics()` returns, check if the returned topics cover at least 50% of the chunk's block range. If not, log a warning and force a retry (the retry logic already exists, it just isn't catching this case).
+### Step 3 — Decide whether to merge to production
+- If full avg F1 > 0.80: merge all 10 fixes into `app/detect_adverts.py`
+- Key things to port: updated prompt (Rule 11 removed), structured JSON handoff logic, coverage guard, all other fixes
+- The 0.839 partial will likely settle slightly lower once the harder remaining episodes are included (some have baseline F1 of 0.000, 0.408, 0.485), but 0.80+ still looks very achievable.
 
-### Step 4 — Re-run the full 122-episode test after Steps 1-3
-- Command: `python tests/test_detect.py` (will process files that don't yet have a `.test.ad`)
-- Note: Need to DELETE existing `.test.ad` files first to force a fresh rerun, OR modify the script to accept a `--reprocess` flag.
-- Then score: `python tests/test_detect.py --score-only`
+### Step 4 — (Optional) Regression analysis
+If regressions are still clustered around the same patterns, consider further prompt tuning vs. just shipping FIX-1 through FIX-10.
 
-### Step 5 — Decide whether to merge to production
-- If new avg F1 > 0.80, merge the prompt fixes into `app/detect_adverts.py`.
-- If still ~0.76, consider whether the chunking logic needs a bigger rethink vs. just shipping the prompt-only fixes (FIX-1 to FIX-6) which were the original improvement.
+---
+
+## Notes / Gotchas
+- The last episode being processed when killed was a ~1142-block film discussion show. It was mid-topic-mapping when cancelled and will NOT have a `.test.ad` — the re-run will reprocess it from scratch, which is fine.
+
+---
+
+## Future Direction — Decision Models (post-merge investigation)
+
+The current approach uses a 14B generative LLM (Qwen3:14b) for what is fundamentally a classification task. This works well but is slow (minutes per episode).
+
+**Ollaya** (https://ollaya.dev) is a local runtime for open "decision models" — small, purpose-built classifiers that return typed answers (choice, score, yes/no) with calibrated confidence scores in milliseconds. It's the local/open-source equivalent of TypeSafe's Jev model.
+
+Models worth investigating for PPP:
+- **`von`** — ModernBERT-large, **8k token context** (big enough for a 75-block chunk), zero-shot, ~20ms per request. Most promising starting point.
+- **`nli`** — Zero-shot classifier, most accurate encoder in Ollaya's benchmarks, ~20ms.
+- **`gliclass`** — Instruction-following zero-shot classifier, cost barely grows with number of label options, ~15ms.
+- **`decider:2b`** — Decoder model (Qwen3.5 base), most accurate overall, ~190ms.
+
+**Key caveat:** These models answer questions about text — they don't do segmentation. You'd still need chunking/boundary logic, but could replace the slow generative LLM call with a fast per-block or per-segment classifier. The 122 gold-standard episodes we now have would make a solid fine-tuning dataset if needed.
+
+**Priority:** Low — complete the current test run and merge decision first.
+
