@@ -821,15 +821,13 @@ def detect_adverts(srt_file, raw_folder):
     coarse_step = 30
     
     from app.prompts import PROMPT_SUSPICION
+    import concurrent.futures
     
-    for i in range(0, total, coarse_step):
+    def process_coarse_chunk(i):
         chunk = blocks[i:i+coarse_chunk_size]
         if not chunk:
-            break
-            
-        print(f"Scanning blocks {chunk[0]['idx']} to {chunk[-1]['idx']}...", end=" ", flush=True)
+            return None
         text = "\n".join(f"[{b['idx']}] {b['text']}" for b in chunk)
-        
         try:
             r = requests.post(
                 ollama_url,
@@ -854,19 +852,42 @@ def detect_adverts(srt_file, raw_folder):
             if r.status_code == 200:
                 content = r.json().get("message", {}).get("content", "").strip()
                 data = json.loads(content)
-                score = data.get("suspicion_score", 1)
-                reasoning = data.get("reasoning", "")
-                
+                return {
+                    "chunk": chunk,
+                    "score": data.get("suspicion_score", 1),
+                    "reasoning": data.get("reasoning", "")
+                }
+            else:
+                return {"chunk": chunk, "error": f"Error {r.status_code}"}
+        except Exception as e:
+            return {"chunk": chunk, "error": str(e)}
+
+    # Submit all coarse chunks to a thread pool
+    futures_map = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        for i in range(0, total, coarse_step):
+            if not blocks[i:i+coarse_chunk_size]:
+                break
+            future = executor.submit(process_coarse_chunk, i)
+            futures_map[future] = i
+            
+        for future in concurrent.futures.as_completed(futures_map):
+            res = future.result()
+            if not res:
+                continue
+            chunk = res["chunk"]
+            c_start, c_end = chunk[0]['idx'], chunk[-1]['idx']
+            if "error" in res:
+                print(f"Scanning blocks {c_start} to {c_end}... Request failed: {res['error']}")
+            else:
+                score = res["score"]
+                reasoning = res["reasoning"]
                 if score >= 4:
-                    print(f"SUSPICIOUS (Score: {score}) - {reasoning[:60]}...")
+                    print(f"Scanning blocks {c_start} to {c_end}... SUSPICIOUS (Score: {score}) - {reasoning[:60]}...")
                     for b in chunk:
                         suspicious_blocks.add(b["idx"])
                 else:
-                    print("Clear.")
-            else:
-                print(f"Error {r.status_code}")
-        except Exception as e:
-            print(f"Request failed: {e}")
+                    print(f"Scanning blocks {c_start} to {c_end}... Clear.")
 
     # Cluster suspicious blocks
     clusters = []
@@ -902,40 +923,54 @@ def detect_adverts(srt_file, raw_folder):
     for c in clusters:
         c_start = max(1, c[0] - 20)
         c_end = min(blocks[-1]['idx'], c[-1] + 20)
-        fine_chunk = [blocks_map[idx] for idx in range(c_start, c_end+1) if idx in blocks_map]
         
-        print(f"\nDeep scanning region {c_start} to {c_end}...")
+        fine_chunk_size = 75
+        fine_overlap = 40
         
-        # Inject context into PROMPT_V18_DIARIZED_MASTER
-        previous_context = "CRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
-        
-        max_retries = 3
-        found = None
-        for attempt in range(max_retries):
-            res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, previous_context, attempt_num=attempt)
-            if res is not None:
-                found = res
+        c_pos = c_start
+        while c_pos <= c_end:
+            c_chunk_end = min(c_pos + fine_chunk_size - 1, c_end)
+            fine_chunk = [blocks_map[idx] for idx in range(c_pos, c_chunk_end + 1) if idx in blocks_map]
+            
+            if not fine_chunk:
                 break
+            
+            print(f"\nDeep scanning region {c_pos} to {c_chunk_end}...")
+            
+            # Inject context into PROMPT_V18_DIARIZED_MASTER
+            previous_context = "CRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
+            
+            max_retries = 3
+            found = None
+            for attempt in range(max_retries):
+                res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, previous_context, attempt_num=attempt)
+                if res is not None:
+                    found = res
+                    break
+                else:
+                    print(f"\n  [Retry {attempt+1}/{max_retries} due to: {err}]", end=" ", flush=True)
+                    time.sleep(3)
+                    
+            if found is not None:
+                # FIX-8: Silent-failure detection guard.
+                chunk_min = fine_chunk[0]['idx']
+                chunk_max = fine_chunk[-1]['idx']
+                chunk_range = chunk_max - chunk_min + 1
+                covered_min = min(t['start_idx'] for t in found)
+                covered_max = max(t['end_idx'] for t in found)
+                covered_range = covered_max - covered_min + 1
+                coverage_ratio = covered_range / chunk_range if chunk_range > 0 else 1.0
+                if coverage_ratio < 0.50:
+                    print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation.")
+                    
+                print(f"Identified {len(found)} topic segments in region.")
+                all_topics.extend(found)
             else:
-                print(f"\n  [Retry {attempt+1}/{max_retries} due to: {err}]", end=" ", flush=True)
-                time.sleep(3)
+                print("Failed fine scan for this region.")
                 
-        if found is not None:
-            # FIX-8: Silent-failure detection guard.
-            chunk_min = fine_chunk[0]['idx']
-            chunk_max = fine_chunk[-1]['idx']
-            chunk_range = chunk_max - chunk_min + 1
-            covered_min = min(t['start_idx'] for t in found)
-            covered_max = max(t['end_idx'] for t in found)
-            covered_range = covered_max - covered_min + 1
-            coverage_ratio = covered_range / chunk_range if chunk_range > 0 else 1.0
-            if coverage_ratio < 0.50:
-                print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation.")
-                
-            print(f"Identified {len(found)} topic segments in region.")
-            all_topics.extend(found)
-        else:
-            print("Failed fine scan for this region.")
+            if c_chunk_end == c_end:
+                break
+            c_pos += (fine_chunk_size - fine_overlap)
 
     # Reconcile topics to avoid overlapping prints and prioritize flagged content
     block_topics = {}
