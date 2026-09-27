@@ -34,42 +34,13 @@ CRITICAL OUTPUT INSTRUCTIONS:
   ]
 }
 
-### RULES FOR BOUNDARIES AND TRANSITIONS (HIGHEST PRIORITY)
+### RULES FOR AD IDENTIFICATION AND BOUNDARIES
 
-1. BREAK ANNOUNCEMENTS AS NATURAL BOUNDARIES: When hosts explicitly announce a commercial break (e.g. "Let's take a quick break", "Shall we go to a break?", "Back in a moment", "After the break..."), that phrase marks the definite conclusion of the preceding show discussion.
-   - The preceding show discussion is `show_content` and ends before or at the break announcement. NEVER lump preceding show conversation into an upcoming advert!
-   - The advert begins at the break transition / music stinger or the sponsor pitch itself.
-   - When returning from a break (e.g. "Welcome back", "Okay, we are back"), show content resumes.
-
-2. GUEST ANSWERS & VOICE NOTES: When a host introduces a guest, expert, celebrity, or listener voice note to answer a question or provide commentary (e.g., "We went to [Name] to answer this question", "[Name], take it away"), this is `show_content`. Do not confuse a guest providing an informational answer with a `podcast_promotion` or `sponsor_read`, even if there is a sudden change in speaker.
-
-3. SPEAKER DIARIZATION: The transcript blocks begin with a speaker label, e.g. `[SPEAKER_00]`. Advertisements often feature a completely different voice actor. A sudden change in speaker cadence or identity is a strong indicator of an ad transition, BUT this is overridden if it's a break announcement (Rule 1) or a guest answer (Rule 2).
-
-### RULES FOR AD IDENTIFICATION (`sponsor_read` & `podcast_promotion`)
-
-4. ORGANIC LEAD-INS (OPEN SANDWICH): This rule applies ONLY when an advert appears WITHOUT any explicit break announcement. If the hosts tell a personal story or have a thematic conversation that transitions seamlessly into pitching a product (e.g., complaining about back pain for 10 blocks, then saying "And that's why I use Casper"), the thematically integrated setup is part of `sponsor_read`.
-   - HOWEVER, if there IS an explicit break announcement, or if the preceding conversation is about an unrelated show topic, DO NOT include the preceding conversation. The ad starts at the break announcement or pitch.
-
-5. TROJAN HORSE PODCAST PROMOTIONS: Some podcast promos open with a compelling editorial hook (e.g., a news analysis, gripping story, or audio drama snippet) but end with a clear Call-To-Action like "...wherever you get your podcasts". If this happens right after a break announcement, the ENTIRE segment following the break is a `podcast_promotion`. If there is NO break transition preceding it, you must still reclassify the preceding hook as `podcast_promotion`.
-
-6. AD TAIL TRUNCATION & DISCLAIMERS: An ad is not over until all legal disclaimers (e.g., "Taxes and fees apply", "18+") and promotional URLs/codes (e.g., "claud.ai slash pivot") have been fully stated. Do not orphan these at the end of the ad; include them in the `sponsor_read`.
-
-7. SHORT PUNCHY & STREAMING ADS: Even a 3-block pitch with product features + availability, or a trailer for a TV/streaming show, must be flagged as a `sponsor_read` (paid placements).
-
-8. PUBLIC SERVICE / GOVERNMENT ADS: Ads from government campaigns, charity appeals, or road safety messages are `sponsor_read` segments, even without a brand name, discount code, or URL.
-
-9. CORPORATE PR & TITLE SPONSORSHIPS: Brands pitching employment practices or title sponsorships (e.g., "The show is presented by [Brand]") are explicit ads and MUST be classified as `sponsor_read`.
-
-10. POST-AD BANTER & SPONSOR FEATURES (CRITICAL RULE): If the hosts continue to organically discuss the sponsor, laugh about the product, or chat about the sponsor's features AFTER the main pitch (for example: chatting about the sponsor's hold music, joking about getting free electricity, or discussing how the sponsor app works), this banter is STILL part of the `sponsor_read`. The ad ONLY ends when the hosts clearly transition to the main show topic or begin the formal show intro. Do NOT separate the banter into a new `show_content` topic.
-
-
-12. SPONSOR NAME RE-MENTION (CLOSED SANDWICH): If the host mentions a named sponsor (e.g., "Octopus Energy"), then engages in a seemingly organic conversation, and then later mentions the sponsor AGAIN, this is a "closed sandwich". The ENTIRE block of conversation between the two sponsor mentions is part of the `sponsor_read`. Treat the whole segment as one continuous advert topic, regardless of how long it is.
-
-13. META-DISCUSSION OF SPONSORSHIP (CRITICAL ANTI-FALSE-POSITIVE RULE): If hosts are discussing sponsorships, advertising deals, or brand names as a TOPIC OF CONVERSATION — rather than actively pitching a product to the listener — this is `show_content`, NOT `sponsor_read` AND NOT `podcast_promotion`. For example:
-   - Hosts discussing how much revenue another podcast earns from its sponsors, or listing who those sponsors are (e.g. "They've got RAMP, Plaid, Google Gemini as sponsors, and they're on track for $30 million").
-   - Hosts analysing the business model or commercial deals of another company, person, or media outlet.
-   - Hosts commenting on the podcast industry's advertising ecosystem or sponsor relationships in general.
-   - A key test: ask whether the hosts are trying to SELL the listener something, or merely TALKING ABOUT selling as a news/editorial topic. If they are narrating or analysing, it is `show_content`.
+1. BREAK ANNOUNCEMENTS: When hosts explicitly announce a commercial break (e.g. "Let's take a quick break", "Back in a moment"), that phrase concludes the preceding show discussion. The advert begins at the break transition / music stinger or the sponsor pitch itself.
+2. AD TAIL TRUNCATION & DISCLAIMERS: An ad is not over until all legal disclaimers (e.g., "Taxes and fees apply", "18+") and promotional URLs/codes have been fully stated.
+3. POST-AD BANTER & SPONSOR FEATURES: If the hosts continue to organically discuss the sponsor, laugh about the product, or chat about the sponsor's features AFTER the main pitch, this banter is STILL part of the `sponsor_read`.
+4. META-DISCUSSION OF SPONSORSHIP: If hosts are discussing sponsorships or brand names as a TOPIC OF CONVERSATION — rather than actively pitching a product to the listener — this is `show_content`, NOT an advert. A key test: are they trying to SELL the listener something?
+5. TROJAN HORSE PROMOS: Some podcast promos open with a compelling editorial hook but end with a clear Call-To-Action like "...wherever you get your podcasts". The ENTIRE segment is a `podcast_promotion`.
 
 EXAMPLE OF CORRECT CHUNKING:
 [1] [SPEAKER_01 | Vol: -15.0dB | CPS: 20 | Brightness: 1400Hz] The Rest is Entertainment is presented by Octopus Energy.
@@ -134,6 +105,7 @@ RULES:
 5. Pre-roll Adverts: For pre-roll adverts at the start of an episode, all consecutive adverts, disclaimers, and closing stingers continue all the way until the show's formal greeting (e.g. "Hello and welcome to the show...").
 6. If you cannot find any advert at all, return start_idx: -1 and end_idx: -1.
 7. META-DISCUSSION IS NOT AN ADVERT: If the hosts are discussing sponsorships, advertising revenue, or brand names as a TOPIC OF CONVERSATION (e.g. analysing how much another podcast earns from its sponsors, listing who sponsors a competitor show, or discussing the economics of podcast advertising), this is regular show content — NOT a commercial break. A key test: are the hosts trying to SELL the listener something right now? If not — if they are narrating, analysing, or editorialising about sponsorship as a subject — return start_idx: -1 and end_idx: -1.
+8. PODCAST PROMOTIONS ARE ADVERTS: If you see a dramatic trailer or editorial hook that ends in pitching another podcast (e.g., "...wherever you get your podcasts"), this IS an advert. Do NOT reject it just because it lacks a traditional sponsor pitch.
 
 EXAMPLE 1 (Pre-roll with Multiple Consecutive Adverts & Legal Disclaimer):
 [1] The show is presented by Octopus Energy.
