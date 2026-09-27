@@ -841,12 +841,15 @@ def detect_adverts(srt_file, raw_folder):
                     ],
                     "format": "json",
                     "stream": False,
+                    "think": False,
                     "options": {
                         "temperature": 0.0,
-                        "num_ctx": 4096
+                        "num_ctx": 4096,
+                        "num_predict": 200,
+                        "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
                     }
                 },
-                timeout=60
+                timeout=120
             )
             if r.status_code == 200:
                 content = r.json().get("message", {}).get("content", "").strip()
