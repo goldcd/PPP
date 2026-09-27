@@ -22,3 +22,5 @@ app/prompts.py
 batch_eval_suite.py
 scratch_check_ranges.py
 handoff.md
+tests/test_coarse_to_fine.py
+tests/

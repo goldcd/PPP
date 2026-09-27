@@ -813,27 +813,103 @@ def detect_adverts(srt_file, raw_folder):
     ##Should add this to config - currently hardcoded here for now
     ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
     total = len(blocks)
-    chunk_size = 75   # FIX-7: reduced from 100 (better focus per chunk)
-    overlap = 40      # FIX-7: increased from 20 (more context at boundaries)
 
-    # --- TOPIC MAPPING ---
-    print("\n--- Topic Mapping & Classification ---")
-    all_topics = []
+    # --- PHASE 0: COARSE "SUSPICION" PASS ---
+    print("\n--- Phase 0: Coarse Suspicion Pass ---")
+    suspicious_blocks = set()
+    coarse_chunk_size = 50
+    coarse_step = 30
     
-    pos = 0
-    previous_context = None
-    while pos < total:
-        end_pos = min(pos + chunk_size, total)
-        chunk = blocks[pos:end_pos]
+    from app.prompts import PROMPT_SUSPICION
+    
+    for i in range(0, total, coarse_step):
+        chunk = blocks[i:i+coarse_chunk_size]
         if not chunk:
             break
             
-        print(f"Mapping topics in blocks {chunk[0]['idx']} to {chunk[-1]['idx']} ({end_pos}/{total})...", end=" ", flush=True)
+        print(f"Scanning blocks {chunk[0]['idx']} to {chunk[-1]['idx']}...", end=" ", flush=True)
+        text = "\n".join(f"[{b['idx']}] {b['text']}" for b in chunk)
+        
+        try:
+            r = requests.post(
+                ollama_url,
+                json={
+                    "model": model_to_use,
+                    "messages": [
+                        {"role": "system", "content": PROMPT_SUSPICION},
+                        {"role": "user", "content": f"Transcript chunk:\n{text}"}
+                    ],
+                    "format": "json",
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.0,
+                        "num_ctx": 4096
+                    }
+                },
+                timeout=60
+            )
+            if r.status_code == 200:
+                content = r.json().get("message", {}).get("content", "").strip()
+                data = json.loads(content)
+                score = data.get("suspicion_score", 1)
+                reasoning = data.get("reasoning", "")
+                
+                if score >= 4:
+                    print(f"SUSPICIOUS (Score: {score}) - {reasoning[:60]}...")
+                    for b in chunk:
+                        suspicious_blocks.add(b["idx"])
+                else:
+                    print("Clear.")
+            else:
+                print(f"Error {r.status_code}")
+        except Exception as e:
+            print(f"Request failed: {e}")
+
+    # Cluster suspicious blocks
+    clusters = []
+    if suspicious_blocks:
+        sorted_suspicious = sorted(list(suspicious_blocks))
+        curr = [sorted_suspicious[0]]
+        for idx in sorted_suspicious[1:]:
+            if idx <= curr[-1] + 20:
+                curr.append(idx)
+            else:
+                clusters.append(curr)
+                curr = [idx]
+        clusters.append(curr)
+
+    print(f"\nCoarse Pass identified {len(clusters)} suspicious region(s).")
+    
+    # --- PHASE 1: FINE TOPIC MAPPING ---
+    print("\n--- Phase 1: Fine Topic Mapping ---")
+    all_topics = []
+    
+    # First, assume everything is show_content
+    for b in blocks:
+        all_topics.append({
+            "title": "Show Content",
+            "start_idx": b["idx"],
+            "end_idx": b["idx"],
+            "category": "show_content",
+            "confidence": "certain"
+        })
+        
+    blocks_map = {b['idx']: b for b in blocks}
+
+    for c in clusters:
+        c_start = max(1, c[0] - 20)
+        c_end = min(blocks[-1]['idx'], c[-1] + 20)
+        fine_chunk = [blocks_map[idx] for idx in range(c_start, c_end+1) if idx in blocks_map]
+        
+        print(f"\nDeep scanning region {c_start} to {c_end}...")
+        
+        # Inject context into PROMPT_V18_DIARIZED_MASTER
+        previous_context = "CRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
         
         max_retries = 3
         found = None
         for attempt in range(max_retries):
-            res, err = ask_phase1_topics(ollama_url, model_to_use, chunk, previous_context, attempt_num=attempt)
+            res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, previous_context, attempt_num=attempt)
             if res is not None:
                 found = res
                 break
@@ -843,44 +919,21 @@ def detect_adverts(srt_file, raw_folder):
                 
         if found is not None:
             # FIX-8: Silent-failure detection guard.
-            # If the returned topics cover <50% of the chunk's block range, the model
-            # likely silently dropped content (context overflow / truncation). Force retry.
-            chunk_min = chunk[0]['idx']
-            chunk_max = chunk[-1]['idx']
+            chunk_min = fine_chunk[0]['idx']
+            chunk_max = fine_chunk[-1]['idx']
             chunk_range = chunk_max - chunk_min + 1
             covered_min = min(t['start_idx'] for t in found)
             covered_max = max(t['end_idx'] for t in found)
             covered_range = covered_max - covered_min + 1
             coverage_ratio = covered_range / chunk_range if chunk_range > 0 else 1.0
             if coverage_ratio < 0.50:
-                print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation — forcing retry.", end=" ", flush=True)
-                found = None  # treat as failure so retry logic fires
-
-        if found is not None:
-            print(f"Identified {len(found)} topic segments.")
+                print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation.")
+                
+            print(f"Identified {len(found)} topic segments in region.")
             all_topics.extend(found)
-            # FIX-9: Structured JSON handoff replaces freeform text summary.
-            # Pass the last 3 topics as a machine-readable JSON block so the model
-            # has an unambiguous signal when we are still inside a sponsor read.
-            handoff_topics = found[-3:]
-            previous_context = (
-                "CONTEXT FROM PREVIOUS CHUNK (last topics):\n"
-                + json.dumps([
-                    {"title": t["title"], "start_idx": t["start_idx"],
-                     "end_idx": t["end_idx"], "category": t["category"]}
-                    for t in handoff_topics
-                ], indent=2)
-                + "\nThe final topic above may be ongoing — if the first blocks of THIS chunk "
-                  "are a continuation of it, extend that topic rather than starting a new one."
-            )
         else:
-            print("Failed. Skipping this chunk.")
-            previous_context = None
-            
-        if end_pos == total:
-            break
-        pos += (chunk_size - overlap)
-        
+            print("Failed fine scan for this region.")
+
     # Reconcile topics to avoid overlapping prints and prioritize flagged content
     block_topics = {}
     

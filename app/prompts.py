@@ -179,3 +179,10 @@ CRITICAL INSTRUCTIONS TO PREVENT ERRORS:
 3. You MUST provide the "analysis" key with a step-by-step reasoning string before stating the start and end indices.
 
 Do not output any other text or format."""
+
+PROMPT_SUSPICION = """You are a fast anomaly detector for a podcast.
+Read this chunk of transcript blocks. Is there a reasonable likelihood that it contains a commercial pitch, sponsor transition, charity appeal, or host read advert?
+Output ONLY a JSON object with:
+"reasoning": "A brief 1-sentence explanation of why",
+"suspicion_score": an integer from 1 to 10 (1 = definitely normal show, 10 = definitely an advert).
+"""
