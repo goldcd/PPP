@@ -11,6 +11,8 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as toml
 
+from app.power import prevent_standby, allow_standby
+
 
 class _Tee:
     """Mirrors all writes to sys.stdout into a log file simultaneously."""
@@ -62,6 +64,7 @@ model_to_use = None
 
 def detect_all_adverts():
     print("Detecting adverts")
+    prevent_standby()
 
     # Start logging — mirror all stdout to a timestamped file under logs/
     os.makedirs("logs", exist_ok=True)
@@ -73,6 +76,7 @@ def detect_all_adverts():
     # If the data path doesn't exist, then tell the user they need to add some podcasts
     if not os.path.exists("data"):
         print("No data folder found. Add some podcasts and try again")
+        allow_standby()
         return
 
     ##Doing it a bit differently to transcribing - maybe I'll go back and improve that later
@@ -111,9 +115,11 @@ def detect_all_adverts():
         stop_ollama()
         tee.close()
         print(f"Log saved to {log_path}")
+        allow_standby()
     else:
         print("No unprocessed .srt files found")
         tee.close()
+        allow_standby()
         return
 
 ##Function to determine which ollama model to use and load it up
