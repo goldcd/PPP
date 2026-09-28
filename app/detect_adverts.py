@@ -676,7 +676,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
 
 import json
 
-def ask_boundary_verification(url, model, review_blocks):
+def ask_boundary_verification(url, model, review_blocks, ad_category="advertisement", approx_start=-1, approx_end=-1, title=""):
     if not review_blocks:
         return None
 
@@ -687,7 +687,7 @@ def ask_boundary_verification(url, model, review_blocks):
     from app.prompts import PROMPT_BOUNDARY_VERIFICATION
     sys_msg = PROMPT_BOUNDARY_VERIFICATION
 
-    user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nOutput JSON with exact start_idx and end_idx."
+    user_msg = f"Phase 1 has identified a {ad_category} ('{title}') approximately between blocks {approx_start} and {approx_end}. Review the surrounding context ({min_idx} to {max_idx}):\n{transcript_text}\n\nOutput JSON with exact start_idx and end_idx."
 
     messages = [
         {"role": "system", "content": sys_msg},
@@ -1227,7 +1227,7 @@ def detect_adverts(srt_file, raw_folder):
                 context_end = max(context_end, min(max_available, 35))
             
             review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
-            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks)
+            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks, ad_category=seg['category'], approx_start=seg['start_idx'], approx_end=seg['end_idx'], title=seg['title'])
             
             if new_bounds:
                 new_start, new_end = new_bounds
