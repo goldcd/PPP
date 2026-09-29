@@ -500,7 +500,7 @@ def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_
         return None, f"Request Error: {e}"
 
 
-def ask_second_pass_review(url, model, review_blocks, before_segment, after_segment, all_blocks_map):
+def ask_second_pass_review(url, model, review_blocks, before_segment, after_segment, all_blocks_map, podcast_title):
     """
     Second-pass targeted review. Given a small set of 'uncertain' blocks sandwiched
     between known segments, asks the LLM to re-evaluate with full surrounding context.
@@ -565,6 +565,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
         "You are a precise podcast content classifier performing a targeted review.\n"
         "You will be given a small set of transcript blocks that were uncertain or sit between two known segments.\n"
         "Your job is to classify each block as accurately as possible given the full context provided.\n\n"
+        f"CURRENT PODCAST TITLE: '{podcast_title}'. (Use this to avoid flagging introductions of this podcast as promos for OTHER podcasts).\n"
         f"CONTEXT: The blocks immediately BEFORE this region are {before_desc}.\n"
         + (f"  Tail of before-segment: \"{before_tail}\"\n" if before_tail else "")
         + f"CONTEXT: The blocks immediately AFTER this region are {after_desc}.\n"
@@ -944,7 +945,10 @@ def detect_adverts(srt_file, raw_folder):
             print(f"\nDeep scanning region {c_pos} to {c_chunk_end}...")
             
             # Inject context into PROMPT_V18_DIARIZED_MASTER
-            previous_context = "CRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
+            # Extract the podcast title from the folder structure (e.g. data/the-adam-buxton-podcast/raw)
+            podcast_title = os.path.basename(os.path.dirname(raw_folder)).replace("-", " ").title()
+            
+            previous_context = f"CURRENT PODCAST TITLE: '{podcast_title}'. (Use this to avoid flagging introductions of this podcast as promos for OTHER podcasts).\nCRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
             
             max_retries = 3
             found = None
@@ -1138,7 +1142,7 @@ def detect_adverts(srt_file, raw_folder):
 
             updated = ask_second_pass_review(
                 ollama_url, model_to_use,
-                review_blks, before_seg, after_seg, blocks_map
+                review_blks, before_seg, after_seg, blocks_map, podcast_title
             )
             if updated:
                 # --- Option B: Timestamp duration override ---

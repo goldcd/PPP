@@ -10,11 +10,11 @@ For each topic, identify:
 3. Category: Choose exactly one of: 'show_content', 'sponsor_read', 'podcast_promotion', 'self_promotion', 'intro_outro'.
 
 Category Definitions:
-- 'show_content': Primary show conversation, stories, news, interviews, or banter.
+- 'show_content': Primary show conversation, stories, news, interviews, or banter. (CRITICAL: This INCLUDES the host introducing the podcast episode, stating the episode number, and introducing the guest! This is NEVER a promotion).
 - 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits.
-- 'self_promotion': Promotion of the podcast itself or its hosts (e.g. asking for emails).
+- 'self_promotion': Promotion of the podcast itself or its hosts (e.g. asking for emails, patreon, live shows, merch).
 - 'sponsor_read': Commercial pitches/advertisements for EXTERNAL companies/products/services.
-- 'podcast_promotion': Promos/trailers/credits for OTHER podcasts.
+- 'podcast_promotion': Promos/trailers/credits for OTHER podcasts. (CRITICAL: DO NOT use this for the current podcast's introduction!).
 
 CRITICAL OUTPUT INSTRUCTIONS:
 - Every single provided block MUST be included in a topic.
