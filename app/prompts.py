@@ -157,7 +157,8 @@ CRITICAL INSTRUCTIONS TO PREVENT ERRORS:
 Do not output any other text or format."""
 
 PROMPT_SUSPICION = """You are a fast anomaly detector for a podcast.
-Read this chunk of transcript blocks. Is there a reasonable likelihood that it contains a commercial pitch, sponsor transition, charity appeal, or host read advert?
+Read this chunk of transcript blocks. Is there a reasonable likelihood that it contains a commercial pitch, sponsor transition, charity appeal, host read advert, or a promo/trailer/cross-promotion for another podcast or show?
+Cross-promotion often has no product or discount code. Typical cues: a different host introducing themselves and their own show, "this week on...", "new episode out now", "new episodes every Wednesday", "follow/listen wherever you get your podcasts", "check out...", or several short trailers back-to-back (often separated by music) before the main episode begins. Even a short promo stack inside a mostly normal chunk should score high.
 Output ONLY a JSON object with:
 "reasoning": "A brief 1-sentence explanation of why",
 "suspicion_score": an integer from 1 to 10 (1 = definitely normal show, 10 = definitely an advert).
