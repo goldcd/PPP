@@ -1,5 +1,6 @@
 AI_CONTEXT.md
 data/
+tests/
 .vscode/
 __pycache__/
 *.pyc
