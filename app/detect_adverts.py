@@ -823,7 +823,7 @@ def detect_adverts(srt_file, raw_folder):
 
     # --- PHASE 0: COARSE "SUSPICION" PASS ---
     print("\n--- Phase 0: Coarse Suspicion Pass ---")
-    suspicious_blocks = set()
+    suspicion_scores = {}
     coarse_chunk_size = 50
     coarse_step = 30
     
@@ -892,14 +892,14 @@ def detect_adverts(srt_file, raw_folder):
                 if score >= 4:
                     print(f"Scanning blocks {c_start} to {c_end}... SUSPICIOUS (Score: {score}) - {reasoning[:60]}...")
                     for b in chunk:
-                        suspicious_blocks.add(b["idx"])
+                        suspicion_scores[b["idx"]] = max(suspicion_scores.get(b["idx"], 0), score)
                 else:
                     print(f"Scanning blocks {c_start} to {c_end}... Clear.")
 
     # Cluster suspicious blocks
     clusters = []
-    if suspicious_blocks:
-        sorted_suspicious = sorted(list(suspicious_blocks))
+    if suspicion_scores:
+        sorted_suspicious = sorted(list(suspicion_scores.keys()))
         curr = [sorted_suspicious[0]]
         for idx in sorted_suspicious[1:]:
             if idx <= curr[-1] + 20:
@@ -962,6 +962,35 @@ def detect_adverts(srt_file, raw_folder):
                     time.sleep(3)
                     
             if found is not None:
+                # --- PHASE 3 INLINE: DISCREPANCY CHECK ---
+                chunk_max_suspicion = max([suspicion_scores.get(b['idx'], 0) for b in fine_chunk])
+                has_ad = any(t['category'] in ['sponsor_read', 'podcast_promotion'] for t in found)
+                
+                if chunk_max_suspicion >= 8 and not has_ad:
+                    print(f"\n  [Discrepancy Check] High suspicion ({chunk_max_suspicion}) but Phase 1 found NO ads. Forcing a re-review...")
+                    discrepancy_prompt = f"""You are a senior podcast editor reviewing a transcript segment for ads.
+A fast-pass scanner flagged this segment as highly suspicious (score {chunk_max_suspicion}/10), likely containing a promo, ad, or trailer.
+However, our primary model missed it.
+Your job is to read carefully and find the ad, paying special attention to 'cold opens', podcast trailers, or sponsor reads that disguise themselves as news or stories.
+IMPORTANT: The podcast you are scanning is called '{podcast_title}'. Do NOT flag introductions or welcome messages for '{podcast_title}' as ads. ONLY flag promotions for OTHER podcasts, or actual commercial pitches.
+Output the EXACT SAME JSON format as requested in your system prompt."""
+                    max_retries_discrepancy = 2
+                    found_discrep = None
+                    for attempt in range(max_retries_discrepancy):
+                        res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, discrepancy_prompt, attempt_num=attempt)
+                        if res is not None:
+                            found_discrep = res
+                            break
+                        else:
+                            time.sleep(3)
+                            
+                    if found_discrep is not None:
+                        has_ad_now = any(t['category'] in ['sponsor_read', 'podcast_promotion'] for t in found_discrep)
+                        if has_ad_now:
+                            print("  [Discrepancy Check] SUCCESS: Uncovered a hidden ad segment! Overriding Phase 1.")
+                            found = found_discrep
+                        else:
+                            print("  [Discrepancy Check] Review complete: Still no ads found. It was likely a false alarm.")
                 # FIX-8: Silent-failure detection guard.
                 chunk_min = fine_chunk[0]['idx']
                 chunk_max = fine_chunk[-1]['idx']
@@ -1153,15 +1182,15 @@ def detect_adverts(srt_file, raw_folder):
                 # gap itself is <= 3 min — consistent with a single sponsored conversation.
                 if orig_before_ad and orig_after_ad and orig_before_ad['category'] in ANCHOR_CATEGORIES:
                     AD_BREAK_MAX_SECS    = 5 * 60  # 5 min max for a single ad break
-                    GAP_CONTENT_MAX_SECS = 3 * 60  # 3 min max for the conversation portion
-                    gap_start_blk    = seg['start_idx']
-                    gap_end_blk      = seg['end_idx']
+                    GAP_CONTENT_MAX_SECS = 30      # 30 seconds max for the gap portion
                     before_start_blk = orig_before_ad['start_idx']
                     after_end_blk    = orig_after_ad['end_idx']
+                    gap_start_blk    = orig_before_ad['end_idx']
+                    gap_end_blk      = orig_after_ad['start_idx']
                     t0  = blocks_map.get(before_start_blk, {}).get('start_time', None)
                     t1  = blocks_map.get(after_end_blk,    {}).get('end_time',   None)
-                    tg0 = blocks_map.get(gap_start_blk,    {}).get('start_time', None)
-                    tg1 = blocks_map.get(gap_end_blk,      {}).get('end_time',   None)
+                    tg0 = blocks_map.get(gap_start_blk,    {}).get('end_time', None)
+                    tg1 = blocks_map.get(gap_end_blk,      {}).get('start_time', None)
                     if t0 is not None and t1 is not None and tg0 is not None and tg1 is not None:
                         total_break_secs = t1 - t0
                         gap_secs         = tg1 - tg0
@@ -1182,8 +1211,8 @@ def detect_adverts(srt_file, raw_folder):
                         if all_show and not has_intro_outro and not gap_follows_intro and not is_preroll and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
                             print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
                             updated = [{
-                                'start_idx':  gap_start_blk,
-                                'end_idx':    gap_end_blk,
+                                'start_idx':  seg['start_idx'],
+                                'end_idx':    seg['end_idx'],
                                 'category':   'sponsor_read',
                                 'title':      'Sponsored Conversation (timestamp override)',
                                 'confidence': 'likely',
