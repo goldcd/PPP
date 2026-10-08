@@ -561,6 +561,19 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
             "like ordinary show discussion.\n\n"
         )
 
+    # Promo cold-open hint: Trailers for other shows often open with a dramatic
+    # clip / dialogue excerpt BEFORE naming the show, so the cold open gets filed as show_content.
+    promo_lead_hint = ""
+    if after_segment and after_segment['category'] == 'podcast_promotion':
+        promo_lead_hint = (
+            "NOTE: The segment immediately AFTER this region is a promo for another podcast/audio show. "
+            "Promos often OPEN with a 'cold open': a dramatic clip, scripted dialogue, sound effects or music "
+            "taken from the promoted show, BEFORE the promo names the show. If this region is such a clip "
+            "(scripted/dramatised dialogue with many different voices, not the hosts of the current podcast "
+            "talking to each other) and it leads straight into the promo, classify it as 'podcast_promotion'. "
+            "If it is genuinely the hosts' own conversation, keep it as 'show_content'.\n\n"
+        )
+
     sys_msg = (
         "You are a precise podcast content classifier performing a targeted review.\n"
         "You will be given a small set of transcript blocks that were uncertain or sit between two known segments.\n"
@@ -572,6 +585,7 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
         + (f"  Head of after-segment: \"{after_head}\"\n" if after_head else "")
         + "\n"
         + same_sponsor_hint
+        + promo_lead_hint
         + "Category Definitions:\n"
         "- 'show_content': Primary show conversation, unrelated to any advertisement.\n"
         "- 'sponsor_read': Part of a commercial pitch for an external company, product, service, or charity.\n"
@@ -1077,13 +1091,51 @@ Output the EXACT SAME JSON format as requested in your system prompt."""
     # AD_CATEGORIES: all categories the user has flagged for removal (from config).
     # Used for: flagging segments, overall removal decisions.
     AD_CATEGORIES = {cat for cat, remove in content_to_remove.items() if remove}
-    # ANCHOR_CATEGORIES: the subset of ad categories that can *structurally* anchor the
-    # sandwich/gap detection (i.e., "we are inside a paid ad break").  Only sponsor_read
-    # qualifies — podcast_promotion and self_promotion are self-contained and don't frame
-    # hidden sponsored conversations.
-    ANCHOR_CATEGORIES = AD_CATEGORIES & {'sponsor_read'}
+    # ANCHOR_CATEGORIES: the categories that act as "hard walls" for sandwich gap detection.
+    # We include ALL AD_CATEGORIES here. If we don't, categories like podcast_promotion
+    # are treated as NON-AD gaps, which causes them to be swept up into adjacent gaps,
+    # re-reviewed without proper context, and often misclassified (destroying Phase 1's work).
+    ANCHOR_CATEGORIES = AD_CATEGORIES
     NON_AD_CATEGORIES = set(content_to_remove.keys()) - ANCHOR_CATEGORIES
     SECOND_PASS_GAP_THRESHOLD = 60  # blocks
+
+    # --- Pre-merge cold-open lead-ins ---
+    # Merge short non-ad segments sitting between a sponsor_read and a podcast_promotion
+    # into a single combined show_content segment. This ensures that the sandwich
+    # heuristic queues them together and the LLM receives the full context 
+    # of the cold open instead of reviewing it one fragmented sentence at a time.
+    PRE_PROMO_MAX_BLOCKS = 40
+    if 'podcast_promotion' in AD_CATEGORIES:
+        # Loop backwards so mutations don't mess up indices
+        for k in range(len(clean_topics) - 1, 0, -1):
+            if clean_topics[k]['category'] != 'podcast_promotion':
+                continue
+            j = k - 1
+            while j >= 0 and clean_topics[j]['category'] not in AD_CATEGORIES:
+                j -= 1
+            if j < 0 or j == k - 1:
+                continue  # no preceding ad, or promo directly adjacent to an ad
+            if clean_topics[j]['category'] not in ANCHOR_CATEGORIES:
+                continue  # only fire after a sponsor_read
+            run_len = clean_topics[k - 1]['end_idx'] - clean_topics[j + 1]['start_idx'] + 1
+            if run_len > PRE_PROMO_MAX_BLOCKS:
+                continue
+            run = list(range(j + 1, k))
+            if any(clean_topics[x]['category'] == 'intro_outro' for x in run):
+                continue
+            
+            # Merge segments from j+1 to k-1 into a single segment
+            merged_seg = {
+                'start_idx': clean_topics[j + 1]['start_idx'],
+                'end_idx': clean_topics[k - 1]['end_idx'],
+                'category': 'show_content',
+                'title': f'Merged Pre-Promo Cold Open ({run_len} blocks)',
+                'confidence': 'certain',
+                'is_flagged': False
+            }
+            clean_topics = clean_topics[:j + 1] + [merged_seg] + clean_topics[k:]
+            print(f"  Merged blocks {merged_seg['start_idx']}-{merged_seg['end_idx']} into a single candidate for review.")
+
     review_candidates = []  # tuples: (seg_idx, reason, orig_before_ad, orig_after_ad)
     added_indices = set()
     n = len(clean_topics)
