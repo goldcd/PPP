@@ -587,11 +587,13 @@ def ask_second_pass_review(url, model, review_blocks, before_segment, after_segm
         + same_sponsor_hint
         + promo_lead_hint
         + "Category Definitions:\n"
-        "- 'show_content': Primary show conversation, unrelated to any advertisement.\n"
-        "- 'sponsor_read': Part of a commercial pitch for an external company, product, service, or charity.\n"
-        "- 'self_promotion': Promotion of the podcast itself or its hosts.\n"
-        "- 'podcast_promotion': Promo for another podcast or audio show.\n"
-        "- 'intro_outro': Standard show intro or outro.\n\n"
+        "- 'show_content': Primary show conversation, stories, news, interviews, or banter. (CRITICAL: This INCLUDES the host of the CURRENT podcast introducing the CURRENT episode, stating the episode number, and introducing the guest! This is NEVER a promotion. Do NOT apply this rule to clips or trailers of OTHER podcasts).\n"
+        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits. (CRITICAL: This ONLY applies to the CURRENT podcast).\n"
+        "- 'self_promotion': Promotion of the podcast itself or its hosts (e.g. asking for emails, patreon, live shows, merch).\n"
+        "- 'sponsor_read': Commercial pitches/advertisements for EXTERNAL companies/products/services.\n"
+        "- 'podcast_promotion': Promos/trailers/credits for OTHER podcasts. (CRITICAL: DO NOT use this for the current podcast's introduction!)\n\n"
+        "TROJAN HORSE PROMOS (CRITICAL RULE):\n"
+        "Some podcast promos open with a compelling editorial hook, dramatic clip, or what sounds like normal show content (e.g. \"Is Donald Trump still cool?\") but end with a clear Call-To-Action like \"...wherever you get your podcasts\" and announce they are a different show. In this case, the ENTIRE segment from the very beginning of the hook to the end of the call-to-action is a 'podcast_promotion'. Do NOT split it into 'show_content' and 'intro_outro'.\n\n"
         "CRITICAL OUTPUT INSTRUCTIONS:\n"
         f"- Classify ALL blocks from {min_idx} to {max_idx}. They must be contiguous with no gaps.\n"
         "- You MUST return ONLY a valid JSON object with this structure:\n"
