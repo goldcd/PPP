@@ -490,15 +490,29 @@ def detect_adverts(srt_file, raw_folder):
                                 if idx not in block_meta or not block_meta[idx]['is_flagged']:
                                     block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
 
-    # --- MICRO-GAP BRIDGING ---
-    # Bridge micro-gaps <= 3 blocks within an ad pod (music stingers, chimes, breathers)
+    # --- GAP BRIDGING ---
+    # 1. Micro-gaps <= 3 blocks within an ad pod (music stingers, chimes, breathers)
+    # 2. Inter-ad / container gaps <= 20 blocks sandwiched between two confirmed ads
+    #    (e.g. dramatic trailer cold hooks like 'Bear Hunt' or fast-paced commercial spots like 'McDonald's')
+    #    unless the gap contains an explicit show return/greeting.
     sorted_ads = sorted(list(detected_ad_blocks))
     final_ads = set()
     if sorted_ads:
         current = sorted_ads[0]
         final_ads.add(current)
         for idx in sorted_ads[1:]:
-            if idx - current <= 4:  # <= 3 unflagged block gap
+            gap_len = idx - current - 1
+            should_bridge = False
+            if gap_len <= 3:
+                should_bridge = True
+            elif gap_len <= 20:
+                gap_blocks = [blocks_map[i] for i in range(current + 1, idx) if i in blocks_map]
+                resumption_cues = ["welcome back", "welcome to", "hello and welcome", "back to the show", "part two", "part 2"]
+                has_resumption = any(any(cue in b['text'].lower() for cue in resumption_cues) for b in gap_blocks)
+                if not has_resumption:
+                    should_bridge = True
+
+            if should_bridge:
                 for fill in range(current + 1, idx):
                     final_ads.add(fill)
                     if current in block_meta:

@@ -184,15 +184,43 @@ ANATOMY OF A COMMERCIAL BREAK / PROMOTIONAL POD:
    - Integrated Lead-in (Fake-Organic Banter): When the host tells an anecdote, joke, or story that flows directly into pitching a sponsor WITHOUT any preceding show intro or break announcement, the story is part of the ad break.
    - Trailer / Cold-Open Promos for OTHER Shows (CRITICAL): Many episodes begin with short promotional trailers for OTHER podcasts played BEFORE the current show's own hosts say hello (e.g. an external host introducing their own podcast like "I'm [Host] and on [Other Show]...", "New episodes every Wednesday", "Listen wherever you get your podcasts"). These trailers for other shows ARE PROMOTIONAL AD PODS THAT MUST BE ISOLATED FOR REMOVAL! NEVER reject them by thinking they are 'for another show, not this show'—networks air them precisely as promotional ads! The main show only begins when the current show's regular hosts begin speaking.
    - True-Crime & News Podcast Trailers: Many podcasts air dramatic trailers for new true-crime, drama, or investigative podcast series (e.g. "From ABC Audio...", "A new podcast series from...", "Listen on Apple Podcasts, Spotify...", "Wherever you get your podcasts"). Even if the narration sounds like a dramatic story, ANY trailer or clip promoting another podcast series IS A PROMOTIONAL AD POD AND MUST BE ISOLATED IN `ad_pods`!
+   - Dramatic Scene Leads & Audio Drama Trailers (CRITICAL RETROACTIVE DEDUCTION): Trailers for audio dramas, narrative podcasts, or investigative thrillers (e.g. 'Bear Hunt') almost ALWAYS open with a cold dramatized dialogue clip (actors performing scenes, simulated news bulletins, discussions about Russian jets, Downing Street, crimes), sound effects, or music stingers BEFORE the narrator says 'New from [Network]...' or announces the show title.
+     WORK BACKWARDS FROM THE CTA: Reading forward, a cold dramatic scene might momentarily look ambiguous, but once you reach the CTA ('New from Goalhanger... Bear Hunt'), WORK BACKWARDS! Once you know a fictional or narrative show is being promoted, it is obvious that the preceding unfamiliar dramatized scene is the teaser hook for that exact promo. Set `start_idx` all the way back to the very first block of that dramatic scene (where the unfamiliar voices or sound effects begin right after the preceding commercial or music stinger), NOT at the voiceover block! Include the entire dramatic scene and the voiceover CTA as a single continuous pod.
+   - Produced Short Commercials & Brand Spots (e.g. McDonald's, retail, food promos): Commercials within a break or pre-roll often jump directly into punchy produced copy, character lines, or product descriptions without a formal intro (e.g. "Sweet, spicy, stolen. You wanted Canada's maple and cheddar chicken so we stole... McDonald's World Menu Heist"). These are commercial advertising spots that MUST be included in the commercial break pod.
+
 3. EXIT (Where the Break Ends):
    - Return Greeting / Show Resumption: The break concludes when the hosts formally resume or introduce the show (e.g. "Hello and welcome to [Current Show]", "Welcome back to the show", or cleanly begin discussing the episode's main editorial agenda).
    - Closing Stinger / Legal Terms: The break includes the final disclaimer ("Terms apply", "18+") and any concluding music chime/stinger before the show resumes.
+   - Commercial Break Container Integrity: When a break was called or when a commercial break is active, all consecutive commercials, sponsor reads, and promotional trailers belong to the break until the regular show hosts explicitly return (e.g. 'Welcome back').
 
 NEGATIVE EXCLUSIONS (WHAT IS NOT AN AD BREAK):
 1. Editorial Interviews & Discussions: If hosts are interviewing a guest who mentions their own book, movie, or podcast, or if the hosts review a show as editorial conversation (WITHOUT sponsor pitches, commercial promo codes, discount URLs, or calls to subscribe), this is regular show content.
 2. Meta-Discussion: Hosts analyzing advertising deals, sponsorship revenue, or media business news are NOT selling anything. This is regular show content.
 3. Current Show Introduction: The host introducing the CURRENT podcast (e.g. "Welcome to [Current Podcast Title]", introducing today's guest) is regular show content. Do NOT confuse trailers for OTHER shows with the current show's intro!
 4. Internal Show Club / Membership Mentions: The hosts' own internal Patreon / Club / Membership mentions (e.g. 'Join our club', 'Bonus episodes for members at our website') are regular show announcements, NOT commercial ad pods.
+
+EXAMPLE OF AUDIO DRAMA TRAILER WITH COLD DRAMATIC SCENE HOOK:
+[100] [MUSIC/NOISE]
+[101] [SPEAKER_09] The president has been shot!
+[102] [SPEAKER_08] Call an ambulance right now!
+[103] [MUSIC/NOISE]
+[104] [SPEAKER_09] Who could have done this?
+[105] [SPEAKER_02] New from Wondery. An audio thriller like no other: 'The Target'.
+[106] [SPEAKER_02] Listen wherever you get your podcasts.
+[107] [MUSIC/NOISE]
+[108] [SPEAKER_01] Welcome back to the show. Today we're talking about movies.
+
+Expected output:
+{
+  "analysis": "Blocks 101 to 104 are a cold dramatized scene from the audio drama 'The Target', which concludes with the title and CTA voiceover at blocks 105-106. The entire trailer runs from block 101 through block 107. Regular show resumes at block 108.",
+  "ad_pods": [
+    {
+      "start_idx": 101,
+      "end_idx": 107,
+      "sponsors": ["The Target", "Wondery"]
+    }
+  ]
+}
 
 OUTPUT FORMAT:
 Return ONLY a valid JSON object matching this structure:
