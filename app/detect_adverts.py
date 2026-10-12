@@ -492,8 +492,8 @@ def detect_adverts(srt_file, raw_folder):
 
     # --- GAP BRIDGING ---
     # 1. Micro-gaps <= 3 blocks within an ad pod (music stingers, chimes, breathers)
-    # 2. Inter-ad / container gaps <= 20 blocks sandwiched between two confirmed ads
-    #    (e.g. dramatic trailer cold hooks like 'Bear Hunt' or fast-paced commercial spots like 'McDonald's')
+    # 2. Inter-ad / container gaps <= 35 blocks sandwiched between two confirmed ads
+    #    (e.g. dramatic trailer cold hooks like 'Bear Hunt' which are ~21-25 blocks, or commercial spots like 'McDonald's')
     #    unless the gap contains an explicit show return/greeting.
     sorted_ads = sorted(list(detected_ad_blocks))
     final_ads = set()
@@ -505,7 +505,7 @@ def detect_adverts(srt_file, raw_folder):
             should_bridge = False
             if gap_len <= 3:
                 should_bridge = True
-            elif gap_len <= 20:
+            elif gap_len <= 35:
                 gap_blocks = [blocks_map[i] for i in range(current + 1, idx) if i in blocks_map]
                 resumption_cues = ["welcome back", "welcome to", "hello and welcome", "back to the show", "part two", "part 2"]
                 has_resumption = any(any(cue in b['text'].lower() for cue in resumption_cues) for b in gap_blocks)
