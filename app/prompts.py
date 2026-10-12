@@ -163,3 +163,52 @@ Output ONLY a JSON object with:
 "reasoning": "A brief 1-sentence explanation of why",
 "suspicion_score": an integer from 1 to 10 (1 = definitely normal show, 10 = definitely an advert).
 """
+
+PROMPT_POD_ISOLATION = """You are an expert podcast audio editor isolating commercial advertising breaks and promotional trailers for removal.
+Your job is to examine the provided transcript segment and determine the EXACT start and end block index of any Commercial Break or Promotional Pod.
+
+DEFINITION OF TARGETS FOR REMOVAL (ad_pods):
+You must isolate TWO types of segments for removal in `ad_pods`:
+1. COMMERCIAL BREAKS: Paid sponsor reads, advertisements, product pitches (e.g. Octopus Energy, Anthropic, Upside, Leesa).
+2. PROMOTIONAL TRAILERS / PROMOS: Trailers, previews, and cross-promotions for OTHER podcasts or shows (e.g. "I'm Ina Garten on Happy Hour...", "Hey it's Sue Bird on Bird's Eye View...", Kara Swisher on 'Pivot'). Trailers for other shows ARE PROMOTIONAL PODS AND MUST BE INCLUDED IN `ad_pods`! NEVER dismiss a trailer by saying 'this is for another show, not an ad'—it is a promotional trailer that MUST be returned in `ad_pods`!
+
+ANATOMY OF A COMMERCIAL BREAK / PROMOTIONAL POD:
+1. COMMERCIAL BREAK SCOPE & MULTI-AD PODS (CRITICAL):
+   - A commercial break or pre-roll often contains MULTIPLE consecutive adverts, sponsor reads, or commercials back-to-back (e.g. an Accenture or Octopus Energy sponsor read immediately followed by a McDonald's or Big Arch commercial, or multiple sponsor pitches in a row).
+   - You MUST include ALL consecutive adverts, sponsor reads, commercial pitches, and related banter in the break.
+   - The break ONLY ends when REGULAR SHOW CONTENT actually begins or resumes (e.g. formal show greeting "Welcome back", or hosts returning to discuss the episode topic).
+   - NEVER cut off the break early if another advert, sponsor pitch, promo code, or commercial immediately follows it!
+2. ENTRY (Where the Break Starts):
+   - Explicit Break Announcement: A host announces a break (e.g. "Let's take a quick break", "Back in a moment", "A word from our sponsors"). The ad break begins at this transition or the music stinger immediately following it.
+   - Direct Sponsor Pitch: The host or voiceover directly pitches a sponsor (e.g. "This episode is brought to you by...", "Support comes from...", "The show is presented by...").
+   - Integrated Lead-in (Fake-Organic Banter): When the host tells an anecdote, joke, or story that flows directly into pitching a sponsor WITHOUT any preceding show intro or break announcement, the story is part of the ad break.
+   - Trailer / Cold-Open Promos for OTHER Shows (CRITICAL): Many episodes begin with short promotional trailers for OTHER podcasts played BEFORE the current show's own hosts say hello (e.g. an external host introducing their own podcast like "I'm [Host] and on [Other Show]...", "New episodes every Wednesday", "Listen wherever you get your podcasts"). These trailers for other shows ARE PROMOTIONAL AD PODS THAT MUST BE ISOLATED FOR REMOVAL! NEVER reject them by thinking they are 'for another show, not this show'—networks air them precisely as promotional ads! The main show only begins when the current show's regular hosts begin speaking.
+   - True-Crime & News Podcast Trailers: Many podcasts air dramatic trailers for new true-crime, drama, or investigative podcast series (e.g. "From ABC Audio...", "A new podcast series from...", "Listen on Apple Podcasts, Spotify...", "Wherever you get your podcasts"). Even if the narration sounds like a dramatic story, ANY trailer or clip promoting another podcast series IS A PROMOTIONAL AD POD AND MUST BE ISOLATED IN `ad_pods`!
+3. EXIT (Where the Break Ends):
+   - Return Greeting / Show Resumption: The break concludes when the hosts formally resume or introduce the show (e.g. "Hello and welcome to [Current Show]", "Welcome back to the show", or cleanly begin discussing the episode's main editorial agenda).
+   - Closing Stinger / Legal Terms: The break includes the final disclaimer ("Terms apply", "18+") and any concluding music chime/stinger before the show resumes.
+
+NEGATIVE EXCLUSIONS (WHAT IS NOT AN AD BREAK):
+1. Editorial Interviews & Discussions: If hosts are interviewing a guest who mentions their own book, movie, or podcast, or if the hosts review a show as editorial conversation (WITHOUT sponsor pitches, commercial promo codes, discount URLs, or calls to subscribe), this is regular show content.
+2. Meta-Discussion: Hosts analyzing advertising deals, sponsorship revenue, or media business news are NOT selling anything. This is regular show content.
+3. Current Show Introduction: The host introducing the CURRENT podcast (e.g. "Welcome to [Current Podcast Title]", introducing today's guest) is regular show content. Do NOT confuse trailers for OTHER shows with the current show's intro!
+4. Internal Show Club / Membership Mentions: The hosts' own internal Patreon / Club / Membership mentions (e.g. 'Join our club', 'Bonus episodes for members at our website') are regular show announcements, NOT commercial ad pods.
+
+OUTPUT FORMAT:
+Return ONLY a valid JSON object matching this structure:
+{
+  "analysis": "Step-by-step reasoning explaining where regular show content ends, where the commercial break begins, the ads/sponsors included, and where normal show content begins or resumes.",
+  "ad_pods": [
+    {
+      "start_idx": 1,
+      "end_idx": 33,
+      "sponsors": ["Octopus Energy", "Accenture"]
+    }
+  ]
+}
+If NO commercial break or promotion exists in the text, return:
+{
+  "analysis": "Reasoning explaining why this is regular show content...",
+  "ad_pods": []
+}
+"""

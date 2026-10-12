@@ -1,8 +1,21 @@
+#!/usr/bin/env python3
+"""
+detect_adverts.py - Advert detection pipeline using Qwen / Ollama.
+
+Architecture:
+1. Phase 0 Coarse Scan: Fast chunk scanning with PROMPT_SUSPICION and "think": False (~1.2s/chunk).
+2. Phase 1 Pod Isolation: Direct commercial break isolation using PROMPT_POD_ISOLATION
+   over focused sub-windows (<= 60 blocks, step 35) to prevent attention drift on large candidate zones.
+3. Phase 2 Episode Sponsor Memory: Re-checks unflagged mentions of confirmed episode sponsors.
+4. Micro-Gap Bridging: Bridges micro-gaps (<= 3 blocks) for music stingers/breathers within a pod.
+"""
+
 import os
 import sys
 import time
 import requests
 import json
+import concurrent.futures
 from collections import Counter
 from datetime import datetime
 
@@ -12,6 +25,7 @@ else:
     import tomli as toml
 
 from app.power import prevent_standby, allow_standby
+from app.prompts import PROMPT_SUSPICION, PROMPT_POD_ISOLATION
 
 
 class _Tee:
@@ -33,884 +47,331 @@ class _Tee:
         sys.stdout = self._stdout
         self._file.close()
 
-"""
 
-This script processes transcription (.srt) files to detect and isolate adverts using an LLM and scoring
-
-1. Discovery (detect_all_adverts):
-   - Scans the 'data' directory for podcasts and their 'raw' folders.
-   - Finds any '.srt' files that do not yet have a corresponding '.ad' file .
-   - If unprocessed files are found, we start processing.
-
-2. Model Initialization (start_ollama / stop_ollama):
-   - Reads 'config.toml' to determine the LLM API endpoint and which model to use.
-   - Automatically selects between a CPU or GPU model based on hardware availability and configuration.
-   - Warms up/loads the model into memory, and optionally downloads it if it is missing locally.
-
-3. Processing Individual Transcripts (detect_adverts):
-   - Reads the configuration to identify which content categories the user wants to remove (e.g., 'sponsor_read', 'podcast_promotion').
-   - Parses the raw .srt file into a list of block dictionaries (parse_srt_blocks) containing the index, text, and raw string.
-   - Topic Mapping (ask_phase1_topics): Chunks the blocks (with overlap) and prompts the LLM to partition the transcript into 
-     contiguous topics. The LLM categorizes each segment into types like 'sponsor_read', 'show_content', etc.
-   - Flagging & Gap Filling: Flags topics for removal if they match the user's config categories It then bridges small gaps between flagged segments to create continuous ad blocks.
-   - Finally, writes out the flagged SRT blocks into a new '.ad' file for downstream removal.
-"""
+# Global variables for Ollama
+ollama_url = None
+model_to_use = None
 
 
-# Global variables for Ollama (set when try to start it)
-ollama_url = None   
-model_to_use = None 
-
-
-def detect_all_adverts():
-    print("Detecting adverts")
-    prevent_standby()
-
-    # Start logging — mirror all stdout to a timestamped file under logs/
-    os.makedirs("logs", exist_ok=True)
-    log_filename = datetime.now().strftime("detect_adverts_%Y%m%d_%H%M%S.log")
-    log_path = os.path.join("logs", log_filename)
-    tee = _Tee(log_path)
-    print(f"Logging to {log_path}")
-
-    # If the data path doesn't exist, then tell the user they need to add some podcasts
-    if not os.path.exists("data"):
-        print("No data folder found. Add some podcasts and try again")
-        allow_standby()
-        return
-
-    ##Doing it a bit differently to transcribing - maybe I'll go back and improve that later
-
-    srt_process_list = []
-    
-
-    #Go on an adventure in the data folder and detect all of the podcasts that have an 
-    for podcast_folder in os.listdir("data"):
-        podcast_path = os.path.join("data", podcast_folder)
-        if os.path.isdir(podcast_path):
-            ##Now, within each podcast folder, we're looking for a raw folder with the rss.xml file in it
-            raw_folder = os.path.join(podcast_path, "raw")
-            if os.path.exists(raw_folder):
-                ##Now within the raw folder, we're looking for .srt files, that do not have a corresponding .ad file
-                ##The .ad file is actually going to be an SRT file, but just containing the segements that we think contain adverts.
-                ##i.e. If we have a matching pair, we've done the scanning. Later we'll use the .ad to pull sections out of the original podcast file
-                for srt_file in os.listdir(raw_folder):
-                    if srt_file.endswith(".srt"):
-                        advert_file = os.path.join(raw_folder, srt_file.replace(".srt", ".ad"))
-                        if os.path.exists(advert_file):
-                            continue
-                        else:
-                            ##Now we've found a file, add it to our list as a tuple
-                            srt_process_list.append((srt_file, raw_folder))
-                            
-    ## If we found any unprocessed .srt, then we've put them on this list. So now if there's anything on it, we should process each one.abs
-    if len(srt_process_list) > 0:
-        print(f"\n Found {len(srt_process_list)} unprocessed .srt files \n")
-        print("\nStarting Ollama LLM Engine\n")
-        start_ollama()
-        for srt_file, raw_folder in srt_process_list:
-            detect_adverts(srt_file, raw_folder)
-        print("\nStopping Ollama LLM Engine\n")
-        ##Then stop the ollama engine. It's on a timeout, and gets kicked from memory if you load something else - so if we quit out/crash, this will leave eventually by itself.
-        stop_ollama()
-        tee.close()
-        print(f"Log saved to {log_path}")
-        allow_standby()
-    else:
-        print("No unprocessed .srt files found")
-        tee.close()
-        allow_standby()
-        return
-
-##Function to determine which ollama model to use and load it up
-##AI did this - should grab any model it needs (assuming it's in Ollama and it's not hallucinating names again - check this, if you change it and see errors..)
 def start_ollama():
+    """Initializes and pre-warms the Ollama model."""
     global ollama_url, model_to_use
-    
+
     config = {}
     if os.path.exists("config.toml"):
         with open("config.toml", "rb") as f:
             config = toml.load(f)
     ollama_config = config.get("ollama", {})
     ollama_url = ollama_config.get("ollama_url", "http://localhost:11434/api/chat")
-    
+
     force_cpu = config.get("processing", {}).get("force_cpu", False)
     import torch
     if torch.cuda.is_available() and not force_cpu:
         model_to_use = ollama_config.get("gpu_model", "qwen3:14b")
-        print(f"\n Using GPU model '{model_to_use}' for advert detection \n")
+        print(f"\n Using GPU model '{model_to_use}' for advert detection \n", flush=True)
     else:
         model_to_use = ollama_config.get("cpu_model", "qwen3:8b")
-        print(f"\n Using CPU model '{model_to_use}' for advert detection \n")
-    
-    # Pre-warm/load the model into memory
-    print(f"Requesting Ollama to load: {model_to_use}")
+        print(f"\n Using CPU model '{model_to_use}' for advert detection \n", flush=True)
+
+    print(f"Requesting Ollama to load: {model_to_use}", flush=True)
     try:
         response = requests.post(
             ollama_url,
-            json={"model": model_to_use, "messages": [], "stream": False},
+            json={"model": model_to_use, "messages": []},
             timeout=120
         )
-        if response.status_code == 404:
-            print(f"Model '{model_to_use}' not found locally. Initiating download...")
-            pull_url = ollama_url.replace("/api/chat", "/api/pull")
-            pull_response = requests.post(
-                pull_url,
-                json={"name": model_to_use, "stream": False},
-                timeout=600  # Give it up to 10 minutes depending on speed
-            )
-            if pull_response.status_code == 200:
-                print(f"Successfully downloaded {model_to_use}!")
-                requests.post(ollama_url, json={"model": model_to_use, "messages": [], "stream": False})
-            else:
-                print(f"Failed to download model: {pull_response.text}")
+        if response.status_code == 200:
+            print("Model loaded successfully", flush=True)
+        else:
+            print(f"Status code {response.status_code} loading model", flush=True)
     except Exception as e:
-        print(f"Failure to load model '{model_to_use}': {e}")
+        print(f"Error loading model: {e}", flush=True)
 
-## Function to tidy up the model when we're done
-##AI did this
+
 def stop_ollama():
+    """Unloads the Ollama model to free VRAM."""
     global ollama_url, model_to_use
     if ollama_url and model_to_use:
-        print(f"Unloading {model_to_use} from memory...")
         try:
             requests.post(
-                ollama_url,
-                json={"model": model_to_use, "messages": [], "stream": False, "keep_alive": 0},
+                ollama_url.replace("/api/chat", "/api/generate"),
+                json={"model": model_to_use, "keep_alive": 0},
                 timeout=5
             )
-        except Exception as e:
-            print(f"Warning: Could not unload model '{model_to_use}': {e}")
+        except Exception:
+            pass
 
-## Function to convert the SRT into a list of dictionaries, for easier handling.
-def parse_srt_blocks(raw_blocks):
-    blocks = []
-    
-    def parse_time(t_str):
-        t_str = t_str.replace(',', '.')
-        h, m, s = t_str.split(':')
-        return int(h) * 3600 + int(m) * 60 + float(s)
 
-    for rb in raw_blocks:
-        lines = rb.strip().split("\n")
+def parse_srt_time(time_str):
+    """Converts an SRT time string (HH:MM:SS,mmm) to total seconds as a float."""
+    time_str = time_str.strip()
+    parts = time_str.split(":")
+    hours = float(parts[0])
+    minutes = float(parts[1])
+    seconds_parts = parts[2].split(",")
+    seconds = float(seconds_parts[0])
+    milliseconds = float(seconds_parts[1]) if len(seconds_parts) > 1 else 0.0
+    return hours * 3600 + minutes * 60 + seconds + (milliseconds / 1000.0)
+
+
+def parse_srt_blocks(srt_blocks_raw):
+    """Parses raw SRT blocks into structured dictionaries."""
+    parsed = []
+    for raw in srt_blocks_raw:
+        raw_clean = raw.strip()
+        if not raw_clean:
+            continue
+        lines = raw_clean.split("\n")
         if len(lines) >= 3:
             try:
                 idx = int(lines[0].strip())
-                
-                # Parse time from line 2
-                time_line = lines[1].strip()
-                start_time = 0.0
-                end_time = 0.0
-                duration = 0.0
-                if " --> " in time_line:
-                    start_str, end_str = time_line.split(" --> ")
-                    start_time = parse_time(start_str)
-                    end_time = parse_time(end_str)
-                    duration = end_time - start_time
+            except ValueError:
+                continue
+            time_line = lines[1].strip()
+            if "-->" not in time_line:
+                continue
+            times = time_line.split("-->")
+            start_time = parse_srt_time(times[0])
+            end_time = parse_srt_time(times[1])
+            text = " ".join([l.strip() for l in lines[2:] if l.strip()])
 
-                text = " ".join(lines[2:]).strip()
-                blocks.append({
-                    ##The index of the block
-                    "idx": idx,
-                    ##The content/transcript of the block
-                    "text": text,
-                    ##An unmolested and complete (but trimmed) version of the block as it appeared in the original file
-                    "raw": rb.strip(),
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "duration": duration
-                })
-            except Exception:
-                pass
-    return blocks
+            # Extract speaker if present
+            spk = None
+            if text.startswith("[") and "]" in text:
+                header = text[1:text.index("]")]
+                spk = header.split("|")[0].strip()
 
-def auto_heal_gaps(cleaned_topics, min_idx, max_idx):
-    if not cleaned_topics:
-        return cleaned_topics
-        
-    # Sort topics by start index just in case LLM returned them out of order
-    cleaned_topics.sort(key=lambda x: x['start_idx'])
-    
-    # 1. Ensure the first topic starts at min_idx
-    if cleaned_topics[0]['start_idx'] > min_idx:
-        cleaned_topics[0]['start_idx'] = min_idx
-        
-    # 2. Heal any gaps between consecutive topics
-    for i in range(len(cleaned_topics) - 1):
-        current_end = cleaned_topics[i]['end_idx']
-        next_start = cleaned_topics[i+1]['start_idx']
-        
-        if current_end < next_start - 1:
-            # Expand the current topic's end_idx to close the gap
-            cleaned_topics[i]['end_idx'] = next_start - 1
-            
-    # 3. Ensure the last topic ends at max_idx
-    if cleaned_topics[-1]['end_idx'] < max_idx:
-        cleaned_topics[-1]['end_idx'] = max_idx
-        
-    return cleaned_topics
+            parsed.append({
+                "idx": idx,
+                "start_time": start_time,
+                "end_time": end_time,
+                "text": text,
+                "spk": spk,
+                "raw": raw_clean
+            })
+    return parsed
 
-CATEGORY_MAP = {
-    # sponsor_read
-    "sponsor": "sponsor_read",
-    "sponsor_read": "sponsor_read",
-    "sponsorship": "sponsor_read",
-    "advert": "sponsor_read",
-    "advertisement": "sponsor_read",
-    "advertisements": "sponsor_read",
-    "advertising": "sponsor_read",
-    "ad": "sponsor_read",
-    "ads": "sponsor_read",
-    "commercial": "sponsor_read",
-    "commercials": "sponsor_read",
-    "paid_placement": "sponsor_read",
-    
-    # podcast_promotion
-    "podcast_promotion": "podcast_promotion",
-    "podcast_promo": "podcast_promotion",
-    "promo": "podcast_promotion",
-    "promos": "podcast_promotion",
-    "promotion": "podcast_promotion",
-    "promotions": "podcast_promotion",
-    "trailer": "podcast_promotion",
-    
-    # self_promotion
-    "self_promotion": "self_promotion",
-    "self_promo": "self_promotion",
-    "house_ad": "self_promotion",
-    
-    # intro_outro
-    "intro_outro": "intro_outro",
-    "intro": "intro_outro",
-    "outro": "intro_outro",
-    "introduction": "intro_outro",
-    "credits": "intro_outro",
-    "theme": "intro_outro",
-    
-    # show_content
-    "show_content": "show_content",
-    "show": "show_content",
-    "content": "show_content",
-    "break_announcement": "show_content",
-    "break_return": "show_content",
-    "conversation": "show_content",
-    "discussion": "show_content",
-    "interview": "show_content",
-    "segment": "show_content",
-}
 
-def normalize_category(cat_str, title_str=None):
-    """
-    FIX-3: title-keyword override removed.
-    The old code promoted any show_content topic with 'sponsor/advert/commercial'
-    in its title to sponsor_read, defeating Rule 13 (meta-discussion guard).
-    Now category string alone drives the decision.
-    """
-    if not cat_str:
-        if title_str:
-            t_lower = str(title_str).lower()
-            if any(k in t_lower for k in ["sponsor_read", "advert_break"]):
-                return "sponsor_read"
-            if "podcast_promotion" in t_lower:
-                return "podcast_promotion"
-        return "show_content"
-    cleaned = str(cat_str).lower().strip().replace("-", "_").replace(" ", "_")
-    if cleaned in CATEGORY_MAP:
-        return CATEGORY_MAP[cleaned]   # FIX-3: no title override after lookup
-    if any(k in cleaned for k in ["sponsor", "advert", "commercial"]):
-        return "sponsor_read"
-    if "podcast" in cleaned and "promo" in cleaned:
-        return "podcast_promotion"
-    if "self" in cleaned and "promo" in cleaned:
-        return "self_promotion"
-    if any(k in cleaned for k in ["intro", "outro"]):
-        return "intro_outro"
-    return "show_content"
-
-## Function to take in the list of block dictionaries, and give us our first idea of segments
-##Ignore that it's called phase 1 - there were more, but it got stupidly complicated..
-def ask_phase1_topics(url, model, blocks_subset, previous_context=None, attempt_num=0):
-    """
-    FIX-2: transcript sent as "[idx] text" per line (matches prompt description).
-    FIX-5: num_ctx raised to 12288.
-    """
-    valid_indices = {b['idx'] for b in blocks_subset}
-    min_idx = min(valid_indices)
-    max_idx = max(valid_indices)
-    # FIX-2: use [idx] prefix on every line
+def ask_pod_isolation(url, model, blocks_subset, podcast_title=""):
+    """Queries Ollama with PROMPT_POD_ISOLATION for a targeted segment of blocks."""
+    min_idx = blocks_subset[0]['idx']
+    max_idx = blocks_subset[-1]['idx']
     transcript_text = "\n".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
 
-    from app.prompts import PROMPT_V18_DIARIZED_MASTER
-    sys_msg = PROMPT_V18_DIARIZED_MASTER
-    
-    if previous_context:
-        sys_msg += f"\n{previous_context}\n\n"
-
-    # Format the user message to include the actual transcript subset being processed.
     user_msg = (
+        f"CURRENT PODCAST TITLE: '{podcast_title}'\n\n"
         f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\n"
-        "Partition this transcript chronologically. Output ONLY a valid JSON object with the 'analysis' string and 'topics' array. "
-        "Each topic object MUST include: 'title', 'start_idx', 'end_idx', 'category' (choose from: sponsor_read, show_content, podcast_promotion, self_promotion, intro_outro), and 'confidence'."
+        f"Identify all commercial break pods or trailers for other shows within Blocks {min_idx} to {max_idx}. "
+        f"Include ALL consecutive adverts in the break until regular show content resumes. Output ONLY the requested JSON object."
     )
-    if attempt_num > 0:
-        user_msg += "\n\nCRITICAL WARNING: Your previous attempt failed. You MUST output an object with exactly two keys: 'analysis' and 'topics'. The 'topics' key MUST be a JSON array of objects. DO NOT output a dictionary for topics. DO NOT include subtopics, details, or raw text. Each topic object MUST have exactly: 'title', 'start_idx', 'end_idx', 'category', 'confidence'."
-    
-    # If we are retrying, increase the temperature slightly to break out of deterministic hallucination loops
-    current_temperature = 0.0 + (0.2 * attempt_num)
-
-    try:
-        # Make a streaming POST request to the local LLM API (e.g., Ollama).
-        r = requests.post(
-            url,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "format": "json",
-                "stream": True,
-                "think": False,
-                "options": {
-                    "temperature": current_temperature,
-                    "num_ctx": 12288,   # FIX-5: raised from 8192
-                    "num_predict": 2000,
-                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
-                }
-            },
-            stream=True,
-            timeout=300,
-        )
-        # Process the successful response
-        if r.status_code == 200:
-            # Accumulate streamed content chunks into a single string
-            raw_parts = []
-            for line in r.iter_lines():
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        token = chunk.get("message", {}).get("content", "")
-                        if token:
-                            raw_parts.append(token)
-                        if chunk.get("done", False):
-                            break
-                    except json.JSONDecodeError:
-                        pass
-            raw = "".join(raw_parts).strip()
-            
-            # Clean up the output in case the LLM wrapped the JSON in markdown code blocks
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-                
-            # Parse the cleaned string into a JSON dictionary
-            data = json.loads(raw)
-            
-            if isinstance(data, list):
-                analysis = ""
-                topics = data
-            else:
-                # Print the LLM's reasoning so we can see if it's going off the rails
-                analysis = data.get("analysis", "")
-                if analysis:
-                    print(f"\n  [LLM Analysis] {analysis.strip()}")
-                # Retrieve the list of topics from the parsed JSON
-                topics = data.get("topics", [])
-            
-            # Ensure the API returned a list as expected
-            if not isinstance(topics, list):
-                if isinstance(topics, dict):
-                    # Check if it's a single topic object directly
-                    if "start_idx" in topics or "start" in topics or "start_index" in topics:
-                        topics = [topics]
-                    # Or maybe it's a dictionary of topics: {"1": {...}, "2": {...}}
-                    elif all(isinstance(v, dict) for v in topics.values()):
-                        topics = list(topics.values())
-                    else:
-                        return None, f"topics is not a list in JSON output (got dict with keys: {list(topics.keys())})"
-                else:
-                    return None, f"topics is not a list in JSON output (got {type(topics).__name__})"
-                
-            cleaned = []
-            # Iterate through each topic to validate and clean up the data
-            for t in topics:
-                # Ensure the topic entry is a dictionary
-                if not isinstance(t, dict):
-                    continue
-                # Extract title and category, providing defaults if missing
-                title = t.get("title") or t.get("topic") or t.get("name") or t.get("description") or t.get("content") or t.get("summary") or "Unknown"
-                if title == "Unknown":
-                    print(f"\n  [DEBUG] Topic missing title key. Raw object: {t}")
-                raw_cat = t.get("category") or t.get("type") or t.get("kind")
-                category = normalize_category(raw_cat, title)
-                
-                # Extract start and end indices, accounting for potential key name variations from the LLM
-                s_idx = t.get("start_idx") or t.get("start_index") or t.get("start_rx") or t.get("start")
-                e_idx = t.get("end_idx") or t.get("end_index") or t.get("end_rx") or t.get("end")
-                
-                # Skip topic if it lacks valid start or end index references
-                if s_idx is None or e_idx is None:
-                    continue
-                try:
-                    # Convert indices to integers
-                    s_val = int(s_idx)
-                    e_val = int(e_idx)
-                    
-                    # Handle relative indices if LLM counted relative to chunk (e.g. 1..100)
-                    chunk_len = max_idx - min_idx + 1
-                    if min_idx > 50 and s_val < min_idx and e_val <= chunk_len + 5:
-                        s_val = min_idx + max(0, s_val - 1)
-                        e_val = min_idx + max(0, e_val - 1)
-
-                    # Clamp the indices to ensure they fall within the bounds of the current chunk
-                    s_val = max(min_idx, min(max_idx, s_val))
-                    e_val = max(min_idx, min(max_idx, e_val))
-                    
-                    # Ensure the start index is less than or equal to the end index
-                    if s_val > e_val:
-                        s_val, e_val = e_val, s_val
-                        
-                    # Append the sanitized topic data to our cleaned list
-                    confidence = t.get("confidence", "certain")
-                    if confidence not in ("certain", "likely", "uncertain"):
-                        confidence = "certain"
-                    cleaned.append({
-                        "title": str(title),
-                        "start_idx": s_val,
-                        "end_idx": e_val,
-                        "category": category,
-                        "confidence": confidence
-                    })
-                except (ValueError, TypeError):
-                    # Ignore and drop any topics where indices couldn't be parsed as integers
-                    pass
-            # Return the successfully cleaned list of topics
-            if len(cleaned) == 0:
-                print(f"\n  [DEBUG] LLM returned 0 valid topics. Raw output was:\n{raw}\n")
-                return None, "LLM returned 0 valid topics (missing block indices or invalid format)"
-            else:
-                cleaned = auto_heal_gaps(cleaned, min_idx, max_idx)
-            return cleaned, None
-        else:
-            # Handle HTTP errors from the API
-            return None, f"API Error: Status {r.status_code} - {r.text}"
-    except Exception as e:
-        # Handle connection errors or other exceptions during the request
-        return None, f"Request Error: {e}"
-
-
-def ask_second_pass_review(url, model, review_blocks, before_segment, after_segment, all_blocks_map, podcast_title):
-    """
-    Second-pass targeted review. Given a small set of 'uncertain' blocks sandwiched
-    between known segments, asks the LLM to re-evaluate with full surrounding context.
-    Returns a list of updated topic dicts, or None on failure.
-    """
-    if not review_blocks:
-        return None
-
-    min_idx = review_blocks[0]['idx']
-    max_idx = review_blocks[-1]['idx']
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in review_blocks)
-
-    before_desc = (
-        f"blocks {before_segment['start_idx']}–{before_segment['end_idx']} "
-        f"classified as '{before_segment['category']}' ('{before_segment['title']}')"
-        if before_segment else "the start of the episode"
-    )
-    after_desc = (
-        f"blocks {after_segment['start_idx']}–{after_segment['end_idx']} "
-        f"classified as '{after_segment['category']}' ('{after_segment['title']}')"
-        if after_segment else "the end of the episode"
-    )
-
-    # Include actual transcript text from the tail of the before-segment and
-    # the head of the after-segment, so the LLM can see the sponsor framing
-    # (e.g. "Lloyds asked about 1990s entertainment" → gap → "Lloyds CTA")
-    CONTEXT_BLOCKS = 8  # how many blocks to pull from each side
-    def _get_tail_text(seg, n):
-        if not seg or not all_blocks_map:
-            return ""
-        idxs = list(range(max(seg['start_idx'], seg['end_idx'] - n + 1), seg['end_idx'] + 1))
-        lines = [f"[{i}] {all_blocks_map[i]['text']}" for i in idxs if i in all_blocks_map]
-        return " ".join(lines)
-
-    def _get_head_text(seg, n):
-        if not seg or not all_blocks_map:
-            return ""
-        idxs = list(range(seg['start_idx'], min(seg['start_idx'] + n, seg['end_idx'] + 1)))
-        lines = [f"[{i}] {all_blocks_map[i]['text']}" for i in idxs if i in all_blocks_map]
-        return " ".join(lines)
-
-    before_tail = _get_tail_text(before_segment, CONTEXT_BLOCKS)
-    after_head  = _get_head_text(after_segment, CONTEXT_BLOCKS)
-
-    # Check if both surrounding segments are the same ad type — strong signal
-    # that the gap is part of the same sponsored conversation
-    same_sponsor_hint = ""
-    if (before_segment and after_segment and
-            before_segment['category'] == 'sponsor_read' and
-            after_segment['category'] == 'sponsor_read'):
-        same_sponsor_hint = (
-            "NOTE: Both surrounding segments are sponsor reads. "
-            "This region may be a 'sponsored conversation' — a passage where the host discusses "
-            "a topic that was explicitly prompted or framed by the surrounding sponsor. "
-            "If the before-segment text introduces a topic (e.g. 'What were your 1990s entertainment memories?') "
-            "and the after-segment text closes it (e.g. a CTA or disclaimer for the same brand), "
-            "this region should be classified as 'sponsor_read' even if the content itself sounds "
-            "like ordinary show discussion.\n\n"
-        )
-
-    # Promo cold-open hint: Trailers for other shows often open with a dramatic
-    # clip / dialogue excerpt BEFORE naming the show, so the cold open gets filed as show_content.
-    promo_lead_hint = ""
-    if after_segment and after_segment['category'] == 'podcast_promotion':
-        promo_lead_hint = (
-            "NOTE: The segment immediately AFTER this region is a promo for another podcast/audio show. "
-            "Promos often OPEN with a 'cold open': a dramatic clip, scripted dialogue, sound effects or music "
-            "taken from the promoted show, BEFORE the promo names the show. If this region is such a clip "
-            "(scripted/dramatised dialogue with many different voices, not the hosts of the current podcast "
-            "talking to each other) and it leads straight into the promo, classify it as 'podcast_promotion'. "
-            "If it is genuinely the hosts' own conversation, keep it as 'show_content'.\n\n"
-        )
-
-    sys_msg = (
-        "You are a precise podcast content classifier performing a targeted review.\n"
-        "You will be given a small set of transcript blocks that were uncertain or sit between two known segments.\n"
-        "Your job is to classify each block as accurately as possible given the full context provided.\n\n"
-        f"CURRENT PODCAST TITLE: '{podcast_title}'. (Use this to avoid flagging introductions of this podcast as promos for OTHER podcasts).\n"
-        f"CONTEXT: The blocks immediately BEFORE this region are {before_desc}.\n"
-        + (f"  Tail of before-segment: \"{before_tail}\"\n" if before_tail else "")
-        + f"CONTEXT: The blocks immediately AFTER this region are {after_desc}.\n"
-        + (f"  Head of after-segment: \"{after_head}\"\n" if after_head else "")
-        + "\n"
-        + same_sponsor_hint
-        + promo_lead_hint
-        + "Category Definitions:\n"
-        "- 'show_content': Primary show conversation, stories, news, interviews, or banter. (CRITICAL: This INCLUDES the host of the CURRENT podcast introducing the CURRENT episode, stating the episode number, and introducing the guest! This is NEVER a promotion. Do NOT apply this rule to clips or trailers of OTHER podcasts).\n"
-        "- 'intro_outro': Standard show intro theme, greeting, outro wrap-up, or ending credits. (CRITICAL: This ONLY applies to the CURRENT podcast).\n"
-        "- 'self_promotion': Promotion of the podcast itself or its hosts (e.g. asking for emails, patreon, live shows, merch).\n"
-        "- 'sponsor_read': Commercial pitches/advertisements for EXTERNAL companies/products/services.\n"
-        "- 'podcast_promotion': Promos/trailers/credits for OTHER podcasts. (CRITICAL: DO NOT use this for the current podcast's introduction!)\n\n"
-        "TROJAN HORSE PROMOS (CRITICAL RULE):\n"
-        "Some podcast promos open with a compelling editorial hook, dramatic clip, or what sounds like normal show content (e.g. \"Is Donald Trump still cool?\") but end with a clear Call-To-Action like \"...wherever you get your podcasts\" and announce they are a different show. In this case, the ENTIRE segment from the very beginning of the hook to the end of the call-to-action is a 'podcast_promotion'. Do NOT split it into 'show_content' and 'intro_outro'.\n\n"
-        "CRITICAL OUTPUT INSTRUCTIONS:\n"
-        f"- Classify ALL blocks from {min_idx} to {max_idx}. They must be contiguous with no gaps.\n"
-        "- You MUST return ONLY a valid JSON object with this structure:\n"
-        "{\n"
-        "  \"analysis\": \"Brief explanation of your decision.\",\n"
-        "  \"topics\": [\n"
-        "    { \"title\": \"Segment name\", \"start_idx\": N, \"end_idx\": M, \"category\": \"...\", \"confidence\": \"certain\" }\n"
-        "  ]\n"
-        "}"
-    )
-
-    user_msg = f"Review these blocks ({min_idx} to {max_idx}):\n{transcript_text}\n\nClassify in JSON."
-
-
-    try:
-        r = requests.post(
-            url,
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                "stream": True,
-                "think": False,  # Changed to False to prevent infinite generation loops on Qwen3
-                "options": {
-                    "temperature": 0.0,
-                    "num_ctx": 12288,  # FIX-5: raised from 8192
-                    "num_predict": 2000,
-                    "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
-                }
-            },
-            stream=True,
-            timeout=180,
-        )
-        if r.status_code != 200:
-            return None
-
-        raw_parts = []
-        for line in r.iter_lines():
-            if line:
-                try:
-                    chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        raw_parts.append(token)
-                    if chunk.get("done", False):
-                        break
-                except json.JSONDecodeError:
-                    pass
-
-        raw = "".join(raw_parts).strip()
-        if "```json" in raw:
-            raw = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            raw = raw.split("```")[1].split("```")[0].strip()
-
-        data = json.loads(raw)
-        analysis = data.get("analysis", "")
-        if analysis:
-            print(f"      [2nd Pass] {analysis.strip()[:200]}")
-
-        topics = data.get("topics", [])
-        cleaned = []
-        for t in topics:
-            if not isinstance(t, dict):
-                continue
-            s_idx = t.get("start_idx") or t.get("start_index") or t.get("start")
-            e_idx = t.get("end_idx") or t.get("end_index") or t.get("end")
-            if s_idx is None or e_idx is None:
-                continue
-            try:
-                s_val = max(min_idx, min(max_idx, int(s_idx)))
-                e_val = max(min_idx, min(max_idx, int(e_idx)))
-                if s_val > e_val:
-                    s_val, e_val = e_val, s_val
-                confidence = t.get("confidence", "certain")
-                if confidence not in ("certain", "likely", "uncertain"):
-                    confidence = "certain"
-                raw_cat = t.get("category") or t.get("type") or t.get("kind")
-                category = normalize_category(raw_cat, t.get("title"))
-                cleaned.append({
-                    "title": str(t.get("title", "Reviewed Segment")),
-                    "start_idx": s_val,
-                    "end_idx": e_val,
-                    "category": category,
-                    "confidence": confidence
-                })
-            except (ValueError, TypeError):
-                pass
-
-        if cleaned:
-            cleaned = auto_heal_gaps(cleaned, min_idx, max_idx)
-        return cleaned if cleaned else None
-
-    except Exception as e:
-        print(f"      [2nd Pass Error] {e}")
-        return None
-
-
-## Top level function to call, to detect adverts (and now other stuff), in a single SRT file
-## This is the new single-pass champion that chunks the SRT and passes it to Qwen to do all the heavy lifting
-
-import json
-
-def ask_boundary_verification(url, model, review_blocks, ad_category="advertisement", approx_start=-1, approx_end=-1, title=""):
-    if not review_blocks:
-        return None
-
-    min_idx = review_blocks[0]['idx']
-    max_idx = review_blocks[-1]['idx']
-    transcript_text = " ".join(f"[{b['idx']}] {b['text']}" for b in review_blocks)
-
-    from app.prompts import PROMPT_BOUNDARY_VERIFICATION
-    sys_msg = PROMPT_BOUNDARY_VERIFICATION
-
-    user_msg = f"Phase 1 has identified a {ad_category} ('{title}') approximately between blocks {approx_start} and {approx_end}. Review the surrounding context ({min_idx} to {max_idx}):\n{transcript_text}\n\nOutput JSON with exact start_idx and end_idx."
-
-    messages = [
-        {"role": "system", "content": sys_msg},
-        {"role": "user", "content": user_msg},
-    ]
 
     max_retries = 3
-    for attempt in range(max_retries + 1):
+    for attempt in range(max_retries):
         try:
             r = requests.post(
                 url,
                 json={
                     "model": model,
-                    "messages": messages,
-                    "format": "json",
-                    "stream": True,
-                    "think": False,
-                    "options": {
-                        "temperature": 0.0,
-                        "num_ctx": 8192,
-                        "num_predict": 2000,
-                        "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
-                    }
-                },
-                stream=True,
-                timeout=180,
-            )
-            if r.status_code != 200:
-                raise Exception(f"HTTP {r.status_code}")
-
-            raw_parts = []
-            for line in r.iter_lines():
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        token = chunk.get("message", {}).get("content", "")
-                        if token:
-                            raw_parts.append(token)
-                        if chunk.get("done", False):
-                            break
-                    except json.JSONDecodeError:
-                        pass
-
-            raw = "".join(raw_parts).strip()
-            messages.append({"role": "assistant", "content": raw})
-            
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-
-            data = json.loads(raw)
-            if isinstance(data, list):
-                raise ValueError(f"LLM returned a JSON array instead of an object (len={len(data)})")
-                
-            analysis = data.get("analysis", "")
-            if not analysis:
-                raise ValueError("JSON object is missing the required 'analysis' string.")
-            
-            print(f"      [Boundary Verify] {analysis.strip()[:200]}")
-                
-            start_idx = data.get("start_idx")
-            end_idx = data.get("end_idx")
-            
-            if start_idx is None or end_idx is None or start_idx == -1 or end_idx == -1:
-                return -1, -1
-                
-            start_idx = int(start_idx)
-            end_idx = int(end_idx)
-            
-            return start_idx, end_idx
-
-        except Exception as e:
-            print(f"      [Boundary Verify Error] {e}")
-            if attempt < max_retries:
-                messages.append({"role": "user", "content": f"Your last response failed with error: {e}. Please try again and strictly follow the JSON object OUTPUT FORMAT."})
-                print(f"      [Boundary Verify Retry {attempt+1}/{max_retries}]")
-                import time
-                time.sleep(1)
-            else:
-                return None
-
-def detect_adverts(srt_file, raw_folder):
-    global ollama_url, model_to_use
-    
-    # Load config to determine what content to remove
-    config = {}
-    if os.path.exists("config.toml"):
-        with open("config.toml", "rb") as f:
-            config = toml.load(f)
-    content_to_remove = config.get("content_to_remove", {
-        "sponsor_read": True,
-        "podcast_promotion": True,
-        "self_promotion": False,
-        "intro_outro": False,
-        "show_content": False
-    })
-    
-    srt_path = os.path.join(raw_folder, srt_file)
-    ad_path = srt_path.replace(".srt", ".ad")
-    print(f"\nDetecting adverts for {srt_file}...")
-
-    # Get the raw SRT
-    try:
-        with open(srt_path, "r", encoding="utf-8") as f:
-            raw_srt_content = f.read()
-    except Exception as e:
-        print(f"Error reading SRT file: {e}")
-        return
-
-    # Split the raw SRT content into individual blocks
-    raw_blocks_list = raw_srt_content.replace("\r\n", "\n").strip().split("\n\n")
-    if not raw_blocks_list or not raw_blocks_list[0]:
-        print("No blocks found in SRT file.")
-        return
-
-    blocks = parse_srt_blocks(raw_blocks_list)
-    if not blocks:
-        print("Failed to parse SRT blocks.")
-        return
-        
-    ##Number of chunks we feed into the LLM at once, along with the overlap between them (i.e. if advert is on boundary, it'll get picked up on other iteration in context)
-    ##Should add this to config - currently hardcoded here for now
-    ##Larger blocks (was 150 before) could be processes - but LLM starts to get lazy, and couldn't find a way to make it be careful.. seemingly "be fucking careful" doesn't help
-    total = len(blocks)
-
-    # --- PHASE 0: COARSE "SUSPICION" PASS ---
-    print("\n--- Phase 0: Coarse Suspicion Pass ---")
-    suspicion_scores = {}
-    coarse_chunk_size = 50
-    coarse_step = 30
-    
-    from app.prompts import PROMPT_SUSPICION
-    import concurrent.futures
-    
-    def process_coarse_chunk(i):
-        chunk = blocks[i:i+coarse_chunk_size]
-        if not chunk:
-            return None
-        text = "\n".join(f"[{b['idx']}] {b['text']}" for b in chunk)
-        try:
-            r = requests.post(
-                ollama_url,
-                json={
-                    "model": model_to_use,
                     "messages": [
-                        {"role": "system", "content": PROMPT_SUSPICION},
-                        {"role": "user", "content": f"Transcript chunk:\n{text}"}
+                        {"role": "system", "content": PROMPT_POD_ISOLATION},
+                        {"role": "user", "content": user_msg}
                     ],
                     "format": "json",
                     "stream": False,
                     "think": False,
                     "options": {
-                        "temperature": 0.0,
-                        "num_ctx": 4096,
-                        "num_predict": 200,
-                        "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                        "temperature": 0.0 + (0.2 * attempt),
+                        "num_ctx": 8192
                     }
                 },
                 timeout=120
             )
             if r.status_code == 200:
                 content = r.json().get("message", {}).get("content", "").strip()
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
                 data = json.loads(content)
-                return {
-                    "chunk": chunk,
-                    "score": data.get("suspicion_score", 1),
-                    "reasoning": data.get("reasoning", "")
-                }
-            else:
-                return {"chunk": chunk, "error": f"Error {r.status_code}"}
+                if isinstance(data, dict):
+                    return data
         except Exception as e:
-            return {"chunk": chunk, "error": str(e)}
+            if attempt == max_retries - 1:
+                print(f"  [Pod Isolation Error]: {e}", flush=True)
+            time.sleep(2)
 
-    # Submit all coarse chunks to a thread pool
+    return {"analysis": "Error", "ad_pods": []}
+
+
+def _format_pod_title_and_category(p):
+    """Derives a user-friendly category and title for a detected ad pod."""
+    p_category = p.get("category")
+    p_title = p.get("title")
+    p_sponsors = p.get("sponsors", [])
+
+    if not isinstance(p_sponsors, list):
+        p_sponsors = [str(p_sponsors)] if p_sponsors else []
+
+    clean_sponsors = [str(s).strip() for s in p_sponsors if str(s).strip()]
+    s_combined = " / ".join(clean_sponsors)
+
+    if not p_category:
+        lower_text = (s_combined + " " + (p_title or "")).lower()
+        if any(w in lower_text for w in ["promo", "trailer", "podcast", "cross-promo", "other show", "preview", "observer"]):
+            p_category = "podcast_promotion"
+        else:
+            p_category = "sponsor_read"
+
+    if not p_title:
+        if s_combined:
+            lower_s = s_combined.lower()
+            if p_category == "podcast_promotion":
+                if any(w in lower_s for w in ["promo", "trailer", "promotion"]):
+                    p_title = s_combined
+                else:
+                    p_title = f"{s_combined} Promotion"
+            else:
+                if any(w in lower_s for w in ["sponsor", "ad", "read", "commercial"]):
+                    p_title = s_combined
+                else:
+                    p_title = f"{s_combined} Sponsor Read"
+        else:
+            p_title = "Sponsor Read" if p_category == "sponsor_read" else "Podcast Promotion"
+
+    return p_category, p_title
+
+
+def detect_adverts(srt_file, raw_folder):
+    """Detects commercial advertising and promotional breaks in a single transcript."""
+    global ollama_url, model_to_use
+    if not ollama_url or not model_to_use:
+        start_ollama()
+
+    srt_path = os.path.join(raw_folder, srt_file)
+    ad_path = srt_path.replace(".srt", ".ad")
+    print(f"\nDetecting adverts for {srt_file}...", flush=True)
+
+    try:
+        with open(srt_path, "r", encoding="utf-8") as f:
+            raw_srt_content = f.read()
+    except Exception as e:
+        print(f"Error reading SRT file: {e}", flush=True)
+        return
+
+    raw_blocks_list = raw_srt_content.replace("\r\n", "\n").strip().split("\n\n")
+    if not raw_blocks_list or not raw_blocks_list[0]:
+        print("No blocks found in SRT file.", flush=True)
+        return
+
+    blocks = parse_srt_blocks(raw_blocks_list)
+    if not blocks:
+        print("Failed to parse SRT blocks.", flush=True)
+        return
+
+    total = len(blocks)
+    blocks_map = {b['idx']: b for b in blocks}
+
+    # Robust podcast title resolution
+    podcast_title = os.path.basename(os.path.dirname(raw_folder)).replace("-", " ").title()
+    if podcast_title.lower() in ("data", "proto results", "local results", ""):
+        for root, dirs, files in os.walk("data"):
+            if srt_file in files:
+                podcast_title = os.path.basename(os.path.dirname(root)).replace("-", " ").title()
+                break
+    print(f"Identified Podcast: '{podcast_title}' ({total} blocks)", flush=True)
+
+    # --- SPEAKER STATISTICS ---
+    spk_counts = Counter(b['spk'] for b in blocks if b['spk'] and b['spk'] != "MUSIC/NOISE")
+    total_spk_blocks = sum(spk_counts.values()) or 1
+    spk_share = {k: v / total_spk_blocks for k, v in spk_counts.items()}
+    rare_speakers = {k for k, share in spk_share.items() if share < 0.05}
+
+    # --- PHASE 0: COARSE "SUSPICION" PASS ---
+    print("\n--- Phase 0: Coarse Suspicion Pass ---", flush=True)
+    suspicion_scores = {}
+    coarse_chunk_size = 50
+    coarse_step = 30
+
+    def process_coarse_chunk(i):
+        chunk = blocks[i:i+coarse_chunk_size]
+        if not chunk:
+            return None
+        text = "\n".join(f"[{b['idx']}] {b['text']}" for b in chunk)
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    ollama_url,
+                    json={
+                        "model": model_to_use,
+                        "messages": [
+                            {"role": "system", "content": PROMPT_SUSPICION},
+                            {"role": "user", "content": f"Transcript chunk:\n{text}"}
+                        ],
+                        "format": "json",
+                        "stream": False,
+                        "think": False,
+                        "options": {
+                            "temperature": 0.0,
+                            "num_ctx": 4096,
+                            "num_predict": 200,
+                            "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
+                        }
+                    },
+                    timeout=120
+                )
+                if r.status_code == 200:
+                    content = r.json().get("message", {}).get("content", "").strip()
+                    data = json.loads(content)
+                    return {
+                        "chunk": chunk,
+                        "score": data.get("suspicion_score", 1),
+                        "reasoning": data.get("reasoning", "")
+                    }
+            except Exception:
+                time.sleep(1)
+        return {"chunk": chunk, "score": 1, "reasoning": "Error"}
+
+    # Submit coarse chunks in parallel (max_workers=2 to prevent Ollama saturation)
     futures_map = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         for i in range(0, total, coarse_step):
             if not blocks[i:i+coarse_chunk_size]:
                 break
             future = executor.submit(process_coarse_chunk, i)
             futures_map[future] = i
-            
+
         for future in concurrent.futures.as_completed(futures_map):
             res = future.result()
-            if not res:
+            if not res or "error" in res:
                 continue
             chunk = res["chunk"]
+            score = res["score"]
+            reasoning = res["reasoning"]
             c_start, c_end = chunk[0]['idx'], chunk[-1]['idx']
-            if "error" in res:
-                print(f"Scanning blocks {c_start} to {c_end}... Request failed: {res['error']}")
-            else:
-                score = res["score"]
-                reasoning = res["reasoning"]
-                if score >= 4:
-                    print(f"Scanning blocks {c_start} to {c_end}... SUSPICIOUS (Score: {score}) - {reasoning[:60]}...")
-                    for b in chunk:
-                        suspicion_scores[b["idx"]] = max(suspicion_scores.get(b["idx"], 0), score)
-                else:
-                    print(f"Scanning blocks {c_start} to {c_end}... Clear.")
+            if score >= 4:
+                print(f"Scanning blocks {c_start} to {c_end}... SUSPICIOUS (Score: {score}) - {reasoning[:60]}...", flush=True)
+                for b in chunk:
+                    suspicion_scores[b["idx"]] = max(suspicion_scores.get(b["idx"], 0), score)
+
+    # Pre-roll guard: always check blocks 1 to 40 if rare voice, music, or sponsor cue is present
+    first_blocks = blocks[:20]
+    has_cold_cue = any(
+        b['spk'] in rare_speakers or
+        b['spk'] == 'MUSIC/NOISE' or
+        any(w in b['text'].lower() for w in ['presented by', 'brought to you', 'sponsor', 'partner'])
+        for b in first_blocks
+    )
+    if has_cold_cue:
+        for b in blocks[:40]:
+            suspicion_scores[b['idx']] = max(suspicion_scores.get(b['idx'], 0), 6)
+
+    # Post-roll guard: if last 25 blocks contain a rare voice or promo cues, flag for check
+    if len(blocks) > 40:
+        tail_blocks = blocks[-25:]
+        has_tail_cue = any(b['spk'] in rare_speakers for b in tail_blocks)
+        if has_tail_cue:
+            for b in tail_blocks:
+                suspicion_scores[b['idx']] = max(suspicion_scores.get(b['idx'], 0), 5)
 
     # Cluster suspicious blocks
     clusters = []
@@ -918,562 +379,231 @@ def detect_adverts(srt_file, raw_folder):
         sorted_suspicious = sorted(list(suspicion_scores.keys()))
         curr = [sorted_suspicious[0]]
         for idx in sorted_suspicious[1:]:
-            if idx <= curr[-1] + 20:
+            if idx <= curr[-1] + 25:
                 curr.append(idx)
             else:
                 clusters.append(curr)
                 curr = [idx]
         clusters.append(curr)
 
-    print(f"\nCoarse Pass identified {len(clusters)} suspicious region(s).")
-    
-    # --- PHASE 1: FINE TOPIC MAPPING ---
-    print("\n--- Phase 1: Fine Topic Mapping ---")
-    all_topics = []
-    
-    # First, assume everything is show_content
-    for b in blocks:
-        all_topics.append({
-            "title": "Show Content",
-            "start_idx": b["idx"],
-            "end_idx": b["idx"],
-            "category": "show_content",
-            "confidence": "certain"
-        })
-        
-    blocks_map = {b['idx']: b for b in blocks}
+    print(f"\nCoarse Pass identified {len(clusters)} suspicious region(s).", flush=True)
+
+    # --- PHASE 1: DIRECT POD ISOLATION ---
+    print("\n--- Phase 1: Direct Pod Isolation ---", flush=True)
+    detected_ad_blocks = set()
+    episode_sponsors = set()
+    block_meta = {b['idx']: {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False} for b in blocks}
 
     for c in clusters:
-        c_start = max(1, c[0] - 20)
-        c_end = min(blocks[-1]['idx'], c[-1] + 20)
-        
-        fine_chunk_size = 75
-        fine_overlap = 40
-        
-        c_pos = c_start
-        while c_pos <= c_end:
-            c_chunk_end = min(c_pos + fine_chunk_size - 1, c_end)
-            fine_chunk = [blocks_map[idx] for idx in range(c_pos, c_chunk_end + 1) if idx in blocks_map]
-            
-            if not fine_chunk:
-                break
-            
-            print(f"\nDeep scanning region {c_pos} to {c_chunk_end}...")
-            
-            # Inject context into PROMPT_V18_DIARIZED_MASTER
-            # Extract the podcast title from the folder structure (e.g. data/the-adam-buxton-podcast/raw)
-            podcast_title = os.path.basename(os.path.dirname(raw_folder)).replace("-", " ").title()
-            
-            previous_context = f"CURRENT PODCAST TITLE: '{podcast_title}'. (Use this to avoid flagging introductions of this podcast as promos for OTHER podcasts).\nCRITICAL: Another model has flagged this specific segment as having a high likelihood of containing an advert. Please partition it carefully, paying special attention to organic sponsor reads and subtle pitches."
-            
-            max_retries = 3
-            found = None
-            for attempt in range(max_retries):
-                res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, previous_context, attempt_num=attempt)
-                if res is not None:
-                    found = res
+        c_min = c[0]
+        c_max = c[-1]
+
+        start_context = 1 if c_min <= 25 else max(1, c_min - 20)
+        end_context = min(total, c_max + 25)
+
+        # Sub-window sliding for candidate regions (keeps LLM within high-attention window)
+        max_pod_window = 50
+        pod_step = 25
+
+        sub_windows = []
+        if (end_context - start_context + 1) <= max_pod_window:
+            sub_windows.append((start_context, end_context))
+        else:
+            if start_context == 1 and end_context > 40:
+                sub_windows.append((1, min(total, 35)))
+                w_start = 12
+            else:
+                w_start = start_context
+
+            while w_start <= end_context:
+                w_end = min(end_context, w_start + max_pod_window - 1)
+                sub_windows.append((w_start, w_end))
+                if w_end == end_context:
                     break
-                else:
-                    print(f"\n  [Retry {attempt+1}/{max_retries} due to: {err}]", end=" ", flush=True)
-                    time.sleep(3)
-                    
-            if found is not None:
-                # --- PHASE 3 INLINE: DISCREPANCY CHECK ---
-                chunk_max_suspicion = max([suspicion_scores.get(b['idx'], 0) for b in fine_chunk])
-                has_ad = any(t['category'] in ['sponsor_read', 'podcast_promotion'] for t in found)
-                
-                if chunk_max_suspicion >= 8 and not has_ad:
-                    print(f"\n  [Discrepancy Check] High suspicion ({chunk_max_suspicion}) but Phase 1 found NO ads. Forcing a re-review...")
-                    discrepancy_prompt = f"""You are a senior podcast editor reviewing a transcript segment for ads.
-A fast-pass scanner flagged this segment as highly suspicious (score {chunk_max_suspicion}/10), likely containing a promo, ad, or trailer.
-However, our primary model missed it.
-Your job is to read carefully and find the ad, paying special attention to 'cold opens', podcast trailers, or sponsor reads that disguise themselves as news or stories.
-IMPORTANT: The podcast you are scanning is called '{podcast_title}'. Do NOT flag introductions or welcome messages for '{podcast_title}' as ads. ONLY flag promotions for OTHER podcasts, or actual commercial pitches.
-Output the EXACT SAME JSON format as requested in your system prompt."""
-                    max_retries_discrepancy = 2
-                    found_discrep = None
-                    for attempt in range(max_retries_discrepancy):
-                        res, err = ask_phase1_topics(ollama_url, model_to_use, fine_chunk, discrepancy_prompt, attempt_num=attempt)
-                        if res is not None:
-                            found_discrep = res
-                            break
-                        else:
-                            time.sleep(3)
-                            
-                    if found_discrep is not None:
-                        has_ad_now = any(t['category'] in ['sponsor_read', 'podcast_promotion'] for t in found_discrep)
-                        if has_ad_now:
-                            print("  [Discrepancy Check] SUCCESS: Uncovered a hidden ad segment! Overriding Phase 1.")
-                            found = found_discrep
-                        else:
-                            print("  [Discrepancy Check] Review complete: Still no ads found. It was likely a false alarm.")
-                # FIX-8: Silent-failure detection guard.
-                chunk_min = fine_chunk[0]['idx']
-                chunk_max = fine_chunk[-1]['idx']
-                chunk_range = chunk_max - chunk_min + 1
-                covered_min = min(t['start_idx'] for t in found)
-                covered_max = max(t['end_idx'] for t in found)
-                covered_range = covered_max - covered_min + 1
-                coverage_ratio = covered_range / chunk_range if chunk_range > 0 else 1.0
-                if coverage_ratio < 0.50:
-                    print(f"\n  [WARNING] Coverage only {coverage_ratio:.0%} of chunk ({covered_min}-{covered_max} vs {chunk_min}-{chunk_max}). Possible silent truncation.")
-                    
-                print(f"Identified {len(found)} topic segments in region.")
-                all_topics.extend(found)
-            else:
-                print("Failed fine scan for this region.")
-                
-            if c_chunk_end == c_end:
-                break
-            c_pos += (fine_chunk_size - fine_overlap)
+                w_start += pod_step
 
-    # Reconcile topics to avoid overlapping prints and prioritize flagged content
-    block_topics = {}
-    
-    for t in all_topics:
-        cat = t['category'].lower()
-        is_flagged = content_to_remove.get(cat, False)
-        
-        for idx in range(t["start_idx"], t["end_idx"] + 1):
-            if idx not in block_topics:
-                block_topics[idx] = (t, is_flagged)
-            else:
-                _, old_flagged = block_topics[idx]
-                if is_flagged and not old_flagged:
-                    block_topics[idx] = (t, is_flagged)
-                    
-    # Rebuild contiguous, non-overlapping clean_topics
-    clean_topics = []
-    if block_topics:
-        indices = sorted(list(block_topics.keys()))
-        current_topic_ref, current_flagged = block_topics[indices[0]]
-        current_start = indices[0]
-        current_end = indices[0]
-        
-        for idx in indices[1:]:
-            t_ref, is_flagged = block_topics[idx]
-            if t_ref == current_topic_ref and idx == current_end + 1:
-                current_end = idx
-            else:
-                clean_topics.append({
-                    "start_idx": current_start,
-                    "end_idx": current_end,
-                    "category": current_topic_ref["category"],
-                    "title": current_topic_ref["title"],
-                    "confidence": current_topic_ref.get("confidence", "certain"),  # FIX-4
-                    "is_flagged": current_flagged
-                })
-                current_topic_ref = t_ref
-                current_flagged = is_flagged
-                current_start = idx
-                current_end = idx
-                
-        clean_topics.append({
-            "start_idx": current_start,
-            "end_idx": current_end,
-            "category": current_topic_ref["category"],
-            "title": current_topic_ref["title"],
-            "confidence": current_topic_ref.get("confidence", "certain"),  # FIX-4
-            "is_flagged": current_flagged
-        })
-
-    print(f"Topic mapping complete. Total distinct segments after reconciling overlaps: {len(clean_topics)}")
-
-    # --- SECOND PASS: Reviewing Uncertain Segments & Gaps ---
-    print("\n--- Second Pass: Reviewing Uncertain Segments & Gaps ---")
-    blocks_map = {b['idx']: b for b in blocks}
-    
-    # Collect candidates for second-pass review using run-based detection:
-    # 1. Any segment explicitly marked 'uncertain' or 'likely' (confidence check)
-    # 2. Contiguous runs of non-ad segments whose TOTAL span is <= 60 blocks and are
-    #    bordered by ad segments on BOTH sides — catches multi-segment gaps like the
-    #    Lloyds 1990s conversation that gets split across two clean_topics entries
-    # 3. self_promotion segments immediately adjacent to a sponsor_read on either side
-    #    (catches context-priming misclassifications)
-    # AD_CATEGORIES: all categories the user has flagged for removal (from config).
-    # Used for: flagging segments, overall removal decisions.
-    AD_CATEGORIES = {cat for cat, remove in content_to_remove.items() if remove}
-    # ANCHOR_CATEGORIES: the categories that act as "hard walls" for sandwich gap detection.
-    # We include ALL AD_CATEGORIES here. If we don't, categories like podcast_promotion
-    # are treated as NON-AD gaps, which causes them to be swept up into adjacent gaps,
-    # re-reviewed without proper context, and often misclassified (destroying Phase 1's work).
-    ANCHOR_CATEGORIES = AD_CATEGORIES
-    NON_AD_CATEGORIES = set(content_to_remove.keys()) - ANCHOR_CATEGORIES
-    SECOND_PASS_GAP_THRESHOLD = 60  # blocks
-
-    # --- Pre-merge cold-open lead-ins ---
-    # Merge short non-ad segments sitting between a sponsor_read and a podcast_promotion
-    # into a single combined show_content segment. This ensures that the sandwich
-    # heuristic queues them together and the LLM receives the full context 
-    # of the cold open instead of reviewing it one fragmented sentence at a time.
-    PRE_PROMO_MAX_BLOCKS = 40
-    if 'podcast_promotion' in AD_CATEGORIES:
-        # Loop backwards so mutations don't mess up indices
-        for k in range(len(clean_topics) - 1, 0, -1):
-            if clean_topics[k]['category'] != 'podcast_promotion':
-                continue
-            j = k - 1
-            while j >= 0 and clean_topics[j]['category'] not in AD_CATEGORIES:
-                j -= 1
-            if j < 0 or j == k - 1:
-                continue  # no preceding ad, or promo directly adjacent to an ad
-            if clean_topics[j]['category'] not in ANCHOR_CATEGORIES:
-                continue  # only fire after a sponsor_read
-            run_len = clean_topics[k - 1]['end_idx'] - clean_topics[j + 1]['start_idx'] + 1
-            if run_len > PRE_PROMO_MAX_BLOCKS:
-                continue
-            run = list(range(j + 1, k))
-            if any(clean_topics[x]['category'] == 'intro_outro' for x in run):
-                continue
-            
-            # Merge segments from j+1 to k-1 into a single segment
-            merged_seg = {
-                'start_idx': clean_topics[j + 1]['start_idx'],
-                'end_idx': clean_topics[k - 1]['end_idx'],
-                'category': 'show_content',
-                'title': f'Merged Pre-Promo Cold Open ({run_len} blocks)',
-                'confidence': 'certain',
-                'is_flagged': False
-            }
-            clean_topics = clean_topics[:j + 1] + [merged_seg] + clean_topics[k:]
-            print(f"  Merged blocks {merged_seg['start_idx']}-{merged_seg['end_idx']} into a single candidate for review.")
-
-    review_candidates = []  # tuples: (seg_idx, reason, orig_before_ad, orig_after_ad)
-    added_indices = set()
-    n = len(clean_topics)
-    ci = 0
-
-    while ci < n:
-        seg = clean_topics[ci]
-
-        # --- Confidence-based check: fires BEFORE run-grouping so uncertain
-        #     segments are never silently absorbed into a run ---
-        confidence = seg.get('confidence', 'certain')
-        if confidence in ('uncertain', 'likely') and seg['category'] not in AD_CATEGORIES:
-            if ci not in added_indices:
-                # No enclosing-ad context for confidence-based candidates
-                review_candidates.append((ci, f"low confidence ({confidence}) on {seg['category']}", None, None))
-                added_indices.add(ci)
-            ci += 1
-            continue
-
-        # --- Run-based gap detection ---
-        if seg['category'] in NON_AD_CATEGORIES:
-            run_start = ci
-            run_end = ci
-            # Extend the run, but stop at uncertain/likely segments
-            while run_end + 1 < n and clean_topics[run_end + 1]['category'] in NON_AD_CATEGORIES:
-                next_conf = clean_topics[run_end + 1].get('confidence', 'certain')
-                if next_conf in ('uncertain', 'likely'):
-                    break
-                run_end += 1
-
-            before_is_ad = (run_start > 0 and clean_topics[run_start - 1]['category'] in ANCHOR_CATEGORIES)
-            after_is_ad  = (run_end < n - 1 and clean_topics[run_end + 1]['category'] in ANCHOR_CATEGORIES)
-
-            if before_is_ad and after_is_ad:
-                # Entire run is sandwiched between two ad segments.
-                # Capture the enclosing ad segments NOW, before reverse-order processing
-                # can corrupt the clean_topics neighbours.
-                enclosing_before = clean_topics[run_start - 1]
-                enclosing_after  = clean_topics[run_end + 1]
-                run_block_start = clean_topics[run_start]['start_idx']
-                run_block_end   = clean_topics[run_end]['end_idx']
-                total_run_len   = run_block_end - run_block_start + 1
-                if total_run_len <= SECOND_PASS_GAP_THRESHOLD:
-                    for k in range(run_start, run_end + 1):
-                        if k not in added_indices:
-                            review_candidates.append((k, f"part of {total_run_len}-block run between two ad segments",
-                                                      enclosing_before, enclosing_after))
-                            added_indices.add(k)
-            else:
-                # Not sandwiched — scan individually for self_promotion adjacent to one ad
-                for k in range(run_start, run_end + 1):
-                    s = clean_topics[k]
-                    if s['category'] == 'self_promotion' and k not in added_indices:
-                        s_before_ad = (k > 0 and clean_topics[k-1]['category'] in ANCHOR_CATEGORIES)
-                        s_after_ad  = (k < n-1 and clean_topics[k+1]['category'] in ANCHOR_CATEGORIES)
-                        if s_before_ad or s_after_ad:
-                            adj_before = clean_topics[k-1] if k > 0 else None
-                            adj_after  = clean_topics[k+1] if k < n-1 else None
-                            review_candidates.append((k, "self_promotion adjacent to sponsor_read (possible misclassification)",
-                                                      adj_before if s_before_ad else None,
-                                                      adj_after  if s_after_ad  else None))
-                            added_indices.add(k)
-
-            ci = run_end + 1
-            continue
-
-        ci += 1
-
-    if review_candidates:
-        print(f"  Found {len(review_candidates)} candidate(s) for second-pass review.")
-        # Process each candidate — apply replacements back to clean_topics
-        # Work in reverse order so indices stay valid after splicing
-        for seg_idx, reason, orig_before_ad, orig_after_ad in sorted(review_candidates, key=lambda x: x[0], reverse=True):
-            seg = clean_topics[seg_idx]
-            print(f"  Reviewing blocks {seg['start_idx']}–{seg['end_idx']} ({reason})...")
-            
-            # Collect the actual block dicts for this segment
-            review_blks = [blocks_map[i] for i in range(seg['start_idx'], seg['end_idx']+1) if i in blocks_map]
-            if not review_blks:
+        for w_s, w_e in sub_windows:
+            w_blocks = [blocks_map[i] for i in range(w_s, w_e + 1) if i in blocks_map]
+            if not w_blocks:
                 continue
 
-            # Use current clean_topics neighbours for the LLM context prompt
-            before_seg = clean_topics[seg_idx - 1] if seg_idx > 0 else None
-            after_seg  = clean_topics[seg_idx + 1] if seg_idx < len(clean_topics) - 1 else None
+            print(f"\nAnalyzing candidate window {w_s} to {w_e}...", flush=True)
+            res = ask_pod_isolation(ollama_url, model_to_use, w_blocks, podcast_title)
 
-            updated = ask_second_pass_review(
-                ollama_url, model_to_use,
-                review_blks, before_seg, after_seg, blocks_map, podcast_title
-            )
-            if updated:
-                # --- Option B: Timestamp duration override ---
-                # Use orig_before_ad / orig_after_ad (captured at collection time) so that
-                # reverse-order processing of multi-segment runs doesn't corrupt the check.
-                # Fires when the LLM returns show_content but the total wall-clock duration
-                # of the whole break (orig_before_ad → orig_after_ad) is <= 5 min AND the
-                # gap itself is <= 3 min — consistent with a single sponsored conversation.
-                if orig_before_ad and orig_after_ad and orig_before_ad['category'] in ANCHOR_CATEGORIES:
-                    AD_BREAK_MAX_SECS    = 5 * 60  # 5 min max for a single ad break
-                    GAP_CONTENT_MAX_SECS = 30      # 30 seconds max for the gap portion
-                    before_start_blk = orig_before_ad['start_idx']
-                    after_end_blk    = orig_after_ad['end_idx']
-                    gap_start_blk    = orig_before_ad['end_idx']
-                    gap_end_blk      = orig_after_ad['start_idx']
-                    t0  = blocks_map.get(before_start_blk, {}).get('start_time', None)
-                    t1  = blocks_map.get(after_end_blk,    {}).get('end_time',   None)
-                    tg0 = blocks_map.get(gap_start_blk,    {}).get('end_time', None)
-                    tg1 = blocks_map.get(gap_end_blk,      {}).get('start_time', None)
-                    if t0 is not None and t1 is not None and tg0 is not None and tg1 is not None:
-                        total_break_secs = t1 - t0
-                        gap_secs         = tg1 - tg0
-                        all_show = all(u['category'] not in AD_CATEGORIES for u in updated)
-                        has_intro_outro = any(u['category'] == 'intro_outro' for u in updated)
-                        # Intro-adjacency guard: if the gap immediately follows an intro_outro
-                        # segment (as classified by the LLM), it cannot be a sponsored
-                        # conversation — it is the show opening. No podcast places a sponsored
-                        # conversation immediately after its formal greeting.
-                        gap_follows_intro = (before_seg is not None and before_seg['category'] == 'intro_outro')
-                        # Pre-roll zone guard: if the before-ad starts within the first 2 minutes,
-                        # we are in pre-roll territory. The gap is show content (intro, teaser,
-                        # or cold-open), not a sponsored conversation. This catches dramatic
-                        # cold-opens sandwiched between pre-rolls where no intro_outro anchor
-                        # exists yet to trigger the semantic guards above.
-                        PREROLL_THRESHOLD_SECS = 120
-                        is_preroll = t0 <= PREROLL_THRESHOLD_SECS
-                        if all_show and not has_intro_outro and not gap_follows_intro and not is_preroll and total_break_secs <= AD_BREAK_MAX_SECS and gap_secs <= GAP_CONTENT_MAX_SECS:
-                            print(f"    [Option B] Timestamp override: break={total_break_secs:.0f}s, gap={gap_secs:.0f}s — classifying as sponsor_read")
-                            updated = [{
-                                'start_idx':  seg['start_idx'],
-                                'end_idx':    seg['end_idx'],
-                                'category':   'sponsor_read',
-                                'title':      'Sponsored Conversation (timestamp override)',
-                                'confidence': 'likely',
-                                'is_flagged': True,
-                            }]
-                # Splice the updated segments in place of the old one
-                clean_topics = clean_topics[:seg_idx] + updated + clean_topics[seg_idx+1:]
-                print(f"    -> Replaced with {len(updated)} segment(s): " +
-                      ", ".join(f"{u['category']}({u['start_idx']}-{u['end_idx']})" for u in updated))
+            analysis = res.get("analysis", "")
+            pods = res.get("ad_pods", [])
+
+            print(f"  Analysis: {analysis[:120]}...", flush=True)
+            if pods:
+                for p in pods:
+                    p_start = p.get("start_idx", -1)
+                    p_end = p.get("end_idx", -1)
+                    p_sponsors = p.get("sponsors", [])
+                    if p_start != -1 and p_end != -1 and p_start <= p_end:
+                        # Auto-correct dropped-digit typo (e.g. 57 -> 570 in window [561, 620])
+                        if p_start < w_s and (p_start * 10) >= w_s and (p_start * 10) <= w_e:
+                            p_start = p_start * 10
+                        if p_end < w_s and (p_end * 10) >= w_s and (p_end * 10) <= w_e:
+                            p_end = p_end * 10
+
+                        # Strictly clamp returned pod indices to active candidate window
+                        p_start = max(w_s, min(w_e, p_start))
+                        p_end = max(w_s, min(w_e, p_end))
+                        if p_start > p_end:
+                            continue
+
+                        print(f"  -> AD POD FOUND: Blocks {p_start} to {p_end} | Sponsors: {p_sponsors}", flush=True)
+                        p_cat, p_title = _format_pod_title_and_category(p)
+                        for idx in range(p_start, p_end + 1):
+                            detected_ad_blocks.add(idx)
+                            if idx not in block_meta or not block_meta[idx]['is_flagged']:
+                                block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
+                        for s in p_sponsors:
+                            if isinstance(s, str) and len(s) > 2:
+                                episode_sponsors.add(s.strip().lower())
             else:
-                print(f"    -> No change (second pass failed or agreed with first pass).")
+                print("  -> No ad pod in this window (Show content confirmed).", flush=True)
 
-    else:
-        print("  No candidates flagged for second-pass review. First pass looks clean.")
+    # --- PHASE 2: EPISODE-LEVEL SPONSOR RE-MENTION CHECK ---
+    if episode_sponsors:
+        print(f"\n--- Episode Sponsor Memory Check for: {list(episode_sponsors)} ---", flush=True)
+        for sponsor in episode_sponsors:
+            for b in blocks:
+                if b['idx'] not in detected_ad_blocks and sponsor in b['text'].lower():
+                    print(f"  Re-mention of '{sponsor}' at block {b['idx']}! Reviewing surrounding context...", flush=True)
+                    recheck_start = max(1, b['idx'] - 15)
+                    recheck_end = min(total, b['idx'] + 25)
+                    recheck_blocks = [blocks_map[i] for i in range(recheck_start, recheck_end + 1) if i in blocks_map]
+                    res = ask_pod_isolation(ollama_url, model_to_use, recheck_blocks, podcast_title)
+                    for p in res.get("ad_pods", []):
+                        p_start = p.get("start_idx", -1)
+                        p_end = p.get("end_idx", -1)
+                        if p_start != -1 and p_end != -1 and p_start <= p_end:
+                            p_start = max(recheck_start, min(recheck_end, p_start))
+                            p_end = max(recheck_start, min(recheck_end, p_end))
+                            if p_start > p_end:
+                                continue
+                            print(f"  -> ADDED AD POD FROM RE-MENTION: Blocks {p_start} to {p_end}", flush=True)
+                            p_cat, p_title = _format_pod_title_and_category(p)
+                            for idx in range(p_start, p_end + 1):
+                                detected_ad_blocks.add(idx)
+                                if idx not in block_meta or not block_meta[idx]['is_flagged']:
+                                    block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
 
-
-    # --- THIRD PASS: Boundary Verification for Adverts ---
-    print("\n--- Third Pass: Boundary Verification for Adverts ---")
-    
-    # Group contiguous or adjacent ad segments into unified commercial break clusters
-    adverts_to_verify = []
-    for seg in clean_topics:
-        if seg['category'] in AD_CATEGORIES:
-            if adverts_to_verify and seg['start_idx'] <= adverts_to_verify[-1]['end_idx'] + 2:
-                # Merge into existing commercial break cluster
-                adverts_to_verify[-1]['end_idx'] = max(adverts_to_verify[-1]['end_idx'], seg['end_idx'])
-                if seg['category'] == 'sponsor_read':
-                    adverts_to_verify[-1]['category'] = 'sponsor_read'
-                adverts_to_verify[-1]['title'] = f"{adverts_to_verify[-1]['title']} / {seg['title']}"
-            else:
-                adverts_to_verify.append(dict(seg))
-            
-    if adverts_to_verify:
-        print(f"  Found {len(adverts_to_verify)} advert(s) for boundary verification.")
-        
-        # Flatten clean_topics into a block-by-block dictionary
-        block_topics = {}
-        for seg in clean_topics:
-            for idx in range(seg['start_idx'], seg['end_idx'] + 1):
-                block_topics[idx] = dict(seg)
-        
-        for seg in adverts_to_verify:
-            print(f"  Verifying boundaries for {seg['category']} at blocks {seg['start_idx']}–{seg['end_idx']}...")
-            
-            # Context: 20 blocks before and after (at least up to block 35 for pre-roll to capture sponsor banter before show intro)
-            PADDING = 20
-            context_start = max(1, seg['start_idx'] - PADDING)
-            max_available = max(blocks_map.keys()) if blocks_map else seg['end_idx'] + PADDING
-            context_end = min(max_available, seg['end_idx'] + PADDING)
-            if seg['start_idx'] <= 10:
-                context_end = max(context_end, min(max_available, 35))
-            
-            review_blks = [blocks_map[i] for i in range(context_start, context_end + 1) if i in blocks_map]
-            new_bounds = ask_boundary_verification(ollama_url, model_to_use, review_blks, ad_category=seg['category'], approx_start=seg['start_idx'], approx_end=seg['end_idx'], title=seg['title'])
-            
-            if new_bounds:
-                new_start, new_end = new_bounds
-                if new_start == -1 and new_end == -1:
-                    print(f"    -> Advert rejected by verification pass. Reclassifying as show_content.")
-                    for idx in range(seg['start_idx'], seg['end_idx'] + 1):
-                        if idx in block_topics:
-                            block_topics[idx]['category'] = 'show_content'
-                            block_topics[idx]['title'] = 'Unverifiable Advert (Reclassified)'
-                else:
-                    old_start = seg['start_idx']
-                    old_end = seg['end_idx']
-                    
-                    if new_start > new_end:
-                        print(f"    -> Invalid bounds returned ({new_start}-{new_end}). Keeping original.")
-                        continue
-                        
-                    # ALLOW EXPANDING! But clamp to context bounds just in case of hallucination.
-                    new_start = max(context_start, new_start)
-                    new_end = min(context_end, new_end)
-                    
-                    if new_start != old_start or new_end != old_end:
-                        if new_start < old_start or new_end > old_end:
-                            print(f"    -> Boundaries EXPANDED from {old_start}-{old_end} to {new_start}-{new_end}")
-                        else:
-                            print(f"    -> Boundaries shrunk from {old_start}-{old_end} to {new_start}-{new_end}")
-                        
-                        # Revert freed blocks to show_content
-                        if new_start > old_start:
-                            for idx in range(old_start, new_start):
-                                if idx in block_topics:
-                                    block_topics[idx]['category'] = 'show_content'
-                                    block_topics[idx]['title'] = 'Recovered Show Content (Pre-roll)'
-                        if new_end < old_end:
-                            for idx in range(new_end + 1, old_end + 1):
-                                if idx in block_topics:
-                                    block_topics[idx]['category'] = 'show_content'
-                                    block_topics[idx]['title'] = 'Recovered Show Content (Post-roll)'
-                                    
-                        # Overlay the advert onto the new bounds (expanding over adjacent show_content)
-                        for idx in range(new_start, new_end + 1):
-                            if idx in block_topics:
-                                block_topics[idx]['category'] = seg['category']
-                                block_topics[idx]['title'] = seg['title']
-                                block_topics[idx]['confidence'] = seg.get('confidence', 'certain')
-                    else:
-                        print(f"    -> Boundaries confirmed as {old_start}-{old_end}")
-            else:
-                print(f"    -> Verification failed. Keeping original boundaries.")
-                
-        # Rebuild contiguous clean_topics from block_topics
-        new_clean_topics = []
-        if block_topics:
-            indices = sorted(list(block_topics.keys()))
-            current_seg = dict(block_topics[indices[0]])
-            current_seg['start_idx'] = indices[0]
-            current_seg['end_idx'] = indices[0]
-            
-            for idx in indices[1:]:
-                blk = block_topics[idx]
-                # Segments are contiguous if category and title match
-                if blk['category'] == current_seg['category'] and blk['title'] == current_seg['title'] and idx == current_seg['end_idx'] + 1:
-                    current_seg['end_idx'] = idx
-                else:
-                    new_clean_topics.append(current_seg)
-                    current_seg = dict(blk)
-                    current_seg['start_idx'] = idx
-                    current_seg['end_idx'] = idx
-                    
-            new_clean_topics.append(current_seg)
-            
-        clean_topics = new_clean_topics
-    else:
-        print("  No adverts found to verify.")
-
-    # Rebuild flagged_indices from (potentially updated) clean_topics
-    # Re-evaluate is_flagged for any topics that may have changed category
-    for seg in clean_topics:
-        seg['is_flagged'] = content_to_remove.get(seg['category'], False)
-
-    print(f"\nFinal segment count after second pass: {len(clean_topics)}")
-
-    # --- PRINT TOPIC MAP TABLE ---
-    print("\n--- GENERATED TOPIC MAP ---")
-    print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Title'}")
-    print("-" * 100)
-    
-    flagged_indices = set()
-    
-    for t in clean_topics:
-        duration = t["end_idx"] - t["start_idx"] + 1
-        is_flagged = t["is_flagged"]
-        confidence = t.get("confidence", "certain")
-        
-        flagged_str = "[FLAGGED]" if is_flagged else "       "
-        conf_str = f"[{confidence.upper()[:3]}]" if confidence != "certain" else "     "
-        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {conf_str} {t['title']} {flagged_str}")
-        
-        if is_flagged:
-            for idx in range(t["start_idx"], t["end_idx"] + 1):
-                flagged_indices.add(idx)
-                
-    print("-" * 100)
-    
-    if not flagged_indices:
-        print("No ad breaks flagged by the weighting heuristic.")
-        with open(ad_path, "w", encoding="utf-8") as f:
-            pass
-        print("Created empty .ad file.")
-        return
-        
-    # Gap filling: If there is a small gap (<= 7 blocks) between two ad blocks, merge them.
-    sorted_ads = sorted(list(flagged_indices))
+    # --- MICRO-GAP BRIDGING ---
+    # Bridge micro-gaps <= 3 blocks within an ad pod (music stingers, chimes, breathers)
+    sorted_ads = sorted(list(detected_ad_blocks))
     final_ads = set()
     if sorted_ads:
         current = sorted_ads[0]
         final_ads.add(current)
         for idx in sorted_ads[1:]:
-            if idx - current <= 8:  # Allow bridging a small gap of ~7 unflagged blocks
+            if idx - current <= 4:  # <= 3 unflagged block gap
                 for fill in range(current + 1, idx):
                     final_ads.add(fill)
+                    if current in block_meta:
+                        block_meta[fill] = dict(block_meta[current])
             final_ads.add(idx)
             current = idx
-            
-    print(f"\nFound total {len(final_ads)} ad blocks after gap filling.")
-    
+
+    # Ensure metadata consistency for all final_ads and unflagged blocks
+    for idx in final_ads:
+        if idx not in block_meta or not block_meta[idx]['is_flagged']:
+            block_meta[idx] = {'category': 'sponsor_read', 'title': 'Sponsor Read', 'is_flagged': True}
+
+    for b in blocks:
+        idx = b['idx']
+        if idx not in final_ads:
+            block_meta[idx] = {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False}
+
+    # Rebuild contiguous clean_topics for topic map display
+    clean_topics = []
+    if blocks:
+        first_idx = blocks[0]['idx']
+        curr_meta = block_meta.get(first_idx, {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False})
+        current_cat = curr_meta['category']
+        current_title = curr_meta['title']
+        current_flagged = curr_meta['is_flagged']
+        current_start = first_idx
+        current_end = first_idx
+
+        for b in blocks[1:]:
+            idx = b['idx']
+            m = block_meta.get(idx, {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False})
+            cat = m['category']
+            title = m['title']
+            flagged = m['is_flagged']
+
+            if cat == current_cat and title == current_title and flagged == current_flagged and idx == current_end + 1:
+                current_end = idx
+            else:
+                clean_topics.append({
+                    "start_idx": current_start,
+                    "end_idx": current_end,
+                    "category": current_cat,
+                    "title": current_title,
+                    "confidence": "certain",
+                    "is_flagged": current_flagged
+                })
+                current_cat = cat
+                current_title = title
+                current_flagged = flagged
+                current_start = idx
+                current_end = idx
+
+        clean_topics.append({
+            "start_idx": current_start,
+            "end_idx": current_end,
+            "category": current_cat,
+            "title": current_title,
+            "confidence": "certain",
+            "is_flagged": current_flagged
+        })
+
+    # --- PRINT TOPIC MAP TABLE ---
+    print("\n--- GENERATED TOPIC MAP ---", flush=True)
+    print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Title'}", flush=True)
+    print("-" * 100, flush=True)
+
+    for t in clean_topics:
+        duration = t["end_idx"] - t["start_idx"] + 1
+        is_flagged = t["is_flagged"]
+        confidence = t.get("confidence", "certain")
+
+        flagged_str = " [FLAGGED]" if is_flagged else ""
+        conf_str = f"[{confidence.upper()[:3]}]" if confidence != "certain" else "     "
+        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {conf_str} {t['title']}{flagged_str}", flush=True)
+
+    print("-" * 100, flush=True)
+
+    print(f"\nFinal detected advert blocks: {len(final_ads)}", flush=True)
+
     # Filter and write matching blocks to the .ad file
     ad_blocks = []
     for b in blocks:
         if b['idx'] in final_ads:
             ad_blocks.append(b['raw'])
-            
+
     if ad_blocks:
         with open(ad_path, "w", encoding="utf-8") as f:
             f.write("\n\n".join(ad_blocks) + "\n\n")
-        print(f"Saved {len(ad_blocks)} advertisement blocks to {ad_path}")
+        print(f"Saved {len(ad_blocks)} advertisement blocks to {ad_path}", flush=True)
     else:
         with open(ad_path, "w", encoding="utf-8") as f:
             pass
-        print("No ads detected. Created empty .ad file.")
+        print("No ads detected. Created empty .ad file.", flush=True)
 
+    # Calculate removal statistics
     if blocks and len(blocks) > 0:
         total_podcast_time = blocks[-1]['end_time'] - blocks[0]['start_time']
-        
-        # Calculate time of ads by grouping contiguous final_ads blocks
         total_ad_time = 0.0
-        
+
         ad_blocks_data = [b for b in blocks if b['idx'] in final_ads]
         if ad_blocks_data:
             current_start = ad_blocks_data[0]['start_time']
             current_end = ad_blocks_data[0]['end_time']
             last_idx = ad_blocks_data[0]['idx']
-            
+
             for b in ad_blocks_data[1:]:
                 if b['idx'] == last_idx + 1:
                     current_end = b['end_time']
@@ -1482,11 +612,59 @@ Output the EXACT SAME JSON format as requested in your system prompt."""
                     current_start = b['start_time']
                     current_end = b['end_time']
                 last_idx = b['idx']
-                
+
             total_ad_time += (current_end - current_start)
 
         if total_podcast_time > 0:
             percentage = (total_ad_time / total_podcast_time) * 100
-            print(f"Percentage of podcast flagged for removal: {percentage:.1f}%")
+            print(f"Percentage of podcast flagged for removal: {percentage:.1f}%\n", flush=True)
         else:
-            print("Percentage of podcast flagged for removal: 0.0%")
+            print("Percentage of podcast flagged for removal: 0.0%\n", flush=True)
+
+
+def detect_all_adverts():
+    """Scans the data/ folder for all unprocessed .srt files and runs advert detection."""
+    print("Detecting adverts")
+    prevent_standby()
+
+    os.makedirs("logs", exist_ok=True)
+    log_filename = datetime.now().strftime("detect_adverts_%Y%m%d_%H%M%S.log")
+    log_path = os.path.join("logs", log_filename)
+    tee = _Tee(log_path)
+    print(f"Logging to {log_path}")
+
+    if not os.path.exists("data"):
+        print("No data folder found. Add some podcasts and try again")
+        allow_standby()
+        tee.close()
+        return
+
+    srt_process_list = []
+    for podcast_folder in os.listdir("data"):
+        podcast_path = os.path.join("data", podcast_folder)
+        if os.path.isdir(podcast_path):
+            raw_folder = os.path.join(podcast_path, "raw")
+            if os.path.exists(raw_folder):
+                for srt_file in os.listdir(raw_folder):
+                    if srt_file.endswith(".srt"):
+                        advert_file = os.path.join(raw_folder, srt_file.replace(".srt", ".ad"))
+                        if os.path.exists(advert_file):
+                            continue
+                        else:
+                            srt_process_list.append((srt_file, raw_folder))
+
+    if len(srt_process_list) > 0:
+        print(f"\nFound {len(srt_process_list)} unprocessed .srt files\n")
+        print("Starting Ollama LLM Engine\n")
+        start_ollama()
+        for srt_file, raw_folder in srt_process_list:
+            detect_adverts(srt_file, raw_folder)
+        print("\nStopping Ollama LLM Engine\n")
+        stop_ollama()
+        tee.close()
+        print(f"Log saved to {log_path}")
+        allow_standby()
+    else:
+        print("No unprocessed .srt files found")
+        tee.close()
+        allow_standby()
