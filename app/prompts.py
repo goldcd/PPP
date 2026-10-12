@@ -196,7 +196,10 @@ ANATOMY OF A COMMERCIAL BREAK / PROMOTIONAL POD:
 NEGATIVE EXCLUSIONS (WHAT IS NOT AN AD BREAK):
 1. Editorial Interviews & Discussions: If hosts are interviewing a guest who mentions their own book, movie, or podcast, or if the hosts review a show as editorial conversation (WITHOUT sponsor pitches, commercial promo codes, discount URLs, or calls to subscribe), this is regular show content.
 2. Meta-Discussion: Hosts analyzing advertising deals, sponsorship revenue, or media business news are NOT selling anything. This is regular show content.
-3. Current Show Introduction: The host introducing the CURRENT podcast (e.g. "Welcome to [Current Podcast Title]", introducing today's guest) is regular show content. Do NOT confuse trailers for OTHER shows with the current show's intro!
+3. Current Show Introduction & Cold-Open Story Prologue:
+   - The host introducing the CURRENT podcast (e.g. "Welcome to [Current Podcast Title]", "I'm [Host Name]", "New episodes every Wednesday") is regular show content.
+   - Narrative, documentary, history, and investigative podcasts (e.g. 'Conspiracy Theories') almost ALWAYS begin with a dramatic story prologue or cold-open scene about the episode's topic BEFORE the host formally says "Welcome to [Current Podcast Title]". This cold-open story prologue is the current episode's regular editorial content, NOT a trailer for another show!
+   - A trailer for ANOTHER show promotes a DIFFERENT show title and airs on external networks (e.g. Wondery, Goalhanger, ABC Audio). An ad pod can NEVER have the CURRENT podcast title as a sponsor! NEVER flag the current show's own cold-open prologue or intro as an ad pod!
 4. Internal Show Club / Membership Mentions: The hosts' own internal Patreon / Club / Membership mentions (e.g. 'Join our club', 'Bonus episodes for members at our website') are regular show announcements, NOT commercial ad pods.
 
 EXAMPLE OF AUDIO DRAMA TRAILER WITH COLD DRAMATIC SCENE HOOK:

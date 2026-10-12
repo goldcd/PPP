@@ -452,6 +452,12 @@ def detect_adverts(srt_file, raw_folder):
                         if p_start > p_end:
                             continue
 
+                        # Filter out false positive pods where the sole sponsor is the current podcast title itself
+                        clean_sponsors = [str(s).strip() for s in p_sponsors if str(s).strip()]
+                        if podcast_title and clean_sponsors and all(s.lower() == podcast_title.lower() or s.lower() in podcast_title.lower() for s in clean_sponsors):
+                            print(f"  -> SKIPPING SELF-SHOW POD: '{clean_sponsors}' matches current podcast '{podcast_title}'", flush=True)
+                            continue
+
                         print(f"  -> AD POD FOUND: Blocks {p_start} to {p_end} | Sponsors: {p_sponsors}", flush=True)
                         p_cat, p_title = _format_pod_title_and_category(p)
                         for idx in range(p_start, p_end + 1):
@@ -460,7 +466,9 @@ def detect_adverts(srt_file, raw_folder):
                                 block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
                         for s in p_sponsors:
                             if isinstance(s, str) and len(s) > 2:
-                                episode_sponsors.add(s.strip().lower())
+                                s_clean = s.strip().lower()
+                                if not podcast_title or (s_clean != podcast_title.lower() and s_clean not in podcast_title.lower()):
+                                    episode_sponsors.add(s_clean)
             else:
                 print("  -> No ad pod in this window (Show content confirmed).", flush=True)
 
@@ -483,6 +491,12 @@ def detect_adverts(srt_file, raw_folder):
                             p_end = max(recheck_start, min(recheck_end, p_end))
                             if p_start > p_end:
                                 continue
+
+                            # Filter out false positive pods where the sole sponsor is the current podcast title itself
+                            clean_sponsors = [str(s).strip() for s in p.get("sponsors", []) if str(s).strip()]
+                            if podcast_title and clean_sponsors and all(s.lower() == podcast_title.lower() or s.lower() in podcast_title.lower() for s in clean_sponsors):
+                                continue
+
                             print(f"  -> ADDED AD POD FROM RE-MENTION: Blocks {p_start} to {p_end}", flush=True)
                             p_cat, p_title = _format_pod_title_and_category(p)
                             for idx in range(p_start, p_end + 1):
