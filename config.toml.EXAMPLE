@@ -40,14 +40,6 @@ force_cpu = false
 # Set to true to insert a subtle 'pop' sound where an advert/segment was deleted
 insert_edit_pop = true
 
-[content_to_remove]
-# Select which categories of content you wish to extract and remove from the podcast
-sponsor_read = true
-podcast_promotion = true
-self_promotion = false
-intro_outro = false
-show_content = false
-
 [export]
 # Set to true to activate exporting of cleaned podcasts to a separate directory
 export_activated = false
@@ -56,4 +48,4 @@ export_path = "W:/ppp"
 
 # The base URL where this folder will be hosted. E.g. "http://192.168.1.100/ppp"
 # Your podcast app is probably going to verify this, you'll probably want this to be a public webserver
-base_url = "https://bobpitch.com/ppp"
+base_url = "https://mysite.com/ppp"

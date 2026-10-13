@@ -47,7 +47,6 @@ The current scope is to:
     - Generates .srt transcription in data\<podcast id> for all podcasts without one
   - Detect Adverts
     - Scans transcription for adverts and generates SRT of their placement
-    - Types of content you want to remove/retain can be specified in config
   - Generate Clean
     - Generates a new mp3 file with the adverts removed
     - Configurable Pop can be inserted where content was removed
