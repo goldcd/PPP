@@ -190,7 +190,7 @@ ANATOMY OF A COMMERCIAL BREAK / PROMOTIONAL POD:
 
 3. EXIT (Where the Break Ends):
    - Return Greeting / Show Resumption: The break concludes when the hosts formally resume or introduce the show (e.g. "Hello and welcome to [Current Show]", "Welcome back to the show", or cleanly begin discussing the episode's main editorial agenda).
-   - Closing Stinger / Legal Terms: The break includes the final disclaimer ("Terms apply", "18+") and any concluding music chime/stinger before the show resumes.
+   - Closing Stinger / Legal Terms / Show Hand-off: The ad break or pre-roll sponsor read continues through the host wrapping up the sponsor anecdote, any disclaimers ("Terms apply", "18+"), and the concluding music chime/stinger right up until the formal show greeting begins (e.g. right before "Hello and welcome..." or "Welcome back..."). Set `end_idx` to include this concluding banter and transition stinger!
    - Commercial Break Container Integrity: When a break was called or when a commercial break is active, all consecutive commercials, sponsor reads, and promotional trailers belong to the break until the regular show hosts explicitly return (e.g. 'Welcome back').
 
 NEGATIVE EXCLUSIONS (WHAT IS NOT AN AD BREAK):
@@ -198,32 +198,9 @@ NEGATIVE EXCLUSIONS (WHAT IS NOT AN AD BREAK):
 2. Meta-Discussion: Hosts analyzing advertising deals, sponsorship revenue, or media business news are NOT selling anything. This is regular show content.
 3. Current Show Introduction & Cold-Open Story Prologue:
    - The host introducing the CURRENT podcast (e.g. "Welcome to [Current Podcast Title]", "I'm [Host Name]", "New episodes every Wednesday") is regular show content.
-   - Narrative, documentary, history, and investigative podcasts (e.g. 'Conspiracy Theories') almost ALWAYS begin with a dramatic story prologue or cold-open scene about the episode's topic BEFORE the host formally says "Welcome to [Current Podcast Title]". This cold-open story prologue is the current episode's regular editorial content, NOT a trailer for another show!
-   - A trailer for ANOTHER show promotes a DIFFERENT show title and airs on external networks (e.g. Wondery, Goalhanger, ABC Audio). An ad pod can NEVER have the CURRENT podcast title as a sponsor! NEVER flag the current show's own cold-open prologue or intro as an ad pod!
+   - Narrative, documentary, history, and investigative podcasts (e.g. 'Conspiracy Theories') almost ALWAYS begin with a dramatic story prologue or cold-open scene about the episode's topic BEFORE the host formally says "Welcome to [Current Podcast Title]". This editorial topic story is show content, NOT a trailer for another show!
+   - HOWEVER, any presenting sponsor pitch or pre-roll sponsor read (e.g. "[Show Title] is presented by [Sponsor]", "This episode is brought to you by [Sponsor]") along with its promotional copy or banter IS A COMMERCIAL POD AND MUST BE ISOLATED FOR REMOVAL in `ad_pods`!
 4. Internal Show Club / Membership Mentions: The hosts' own internal Patreon / Club / Membership mentions (e.g. 'Join our club', 'Bonus episodes for members at our website') are regular show announcements, NOT commercial ad pods.
-
-EXAMPLE OF AUDIO DRAMA TRAILER WITH COLD DRAMATIC SCENE HOOK:
-[100] [MUSIC/NOISE]
-[101] [SPEAKER_09] The president has been shot!
-[102] [SPEAKER_08] Call an ambulance right now!
-[103] [MUSIC/NOISE]
-[104] [SPEAKER_09] Who could have done this?
-[105] [SPEAKER_02] New from Wondery. An audio thriller like no other: 'The Target'.
-[106] [SPEAKER_02] Listen wherever you get your podcasts.
-[107] [MUSIC/NOISE]
-[108] [SPEAKER_01] Welcome back to the show. Today we're talking about movies.
-
-Expected output:
-{
-  "analysis": "Blocks 101 to 104 are a cold dramatized scene from the audio drama 'The Target', which concludes with the title and CTA voiceover at blocks 105-106. The entire trailer runs from block 101 through block 107. Regular show resumes at block 108.",
-  "ad_pods": [
-    {
-      "start_idx": 101,
-      "end_idx": 107,
-      "sponsors": ["The Target", "Wondery"]
-    }
-  ]
-}
 
 OUTPUT FORMAT:
 Return ONLY a valid JSON object matching this structure:
