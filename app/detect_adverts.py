@@ -2,12 +2,15 @@
 """
 detect_adverts.py - Advert detection pipeline using Qwen / Ollama.
 
-Architecture:
-1. Phase 0 Coarse Scan: Fast chunk scanning with PROMPT_SUSPICION and "think": False (~1.2s/chunk).
-2. Phase 1 Pod Isolation: Direct commercial break isolation using PROMPT_POD_ISOLATION
-   over focused sub-windows (<= 60 blocks, step 35) to prevent attention drift on large candidate zones.
-3. Phase 2 Episode Sponsor Memory: Re-checks unflagged mentions of confirmed episode sponsors.
-4. Micro-Gap Bridging: Bridges micro-gaps (<= 3 blocks) for music stingers/breathers within a pod.
+Two-Stage Architecture:
+1. Stage 1 (Find): Fast macro-window scanning (120 blocks, step 90) using PROMPT_POD_ISOLATION.
+   Gives the model complete view of the commercial break container and surrounding discussion,
+   avoiding break truncation.
+2. Stage 2 (Refine): Targeted boundary verification using PROMPT_BOUNDARY_VERIFICATION on each
+   detected pod. Constrained to +/- 8 blocks margin to snap start and end boundaries down to
+   the exact subtitle line while pruning false-positive candidate regions.
+3. Stage 3 (Clean): Micro-gap bridging (<= 3 blocks) for music stingers/chimes within pods,
+   topic-map reconstruction, and writing the final .ad file.
 """
 
 import os
@@ -15,8 +18,6 @@ import sys
 import time
 import requests
 import json
-import concurrent.futures
-from collections import Counter
 from datetime import datetime
 
 if sys.version_info >= (3, 11):
@@ -25,7 +26,13 @@ else:
     import tomli as toml
 
 from app.power import prevent_standby, allow_standby
-from app.prompts import PROMPT_SUSPICION, PROMPT_POD_ISOLATION
+from app.prompts import PROMPT_POD_ISOLATION, PROMPT_BOUNDARY_VERIFICATION
+
+# Windowing parameters
+WINDOW_SIZE = 120
+STEP_SIZE = 90
+EDGE_MARGIN = 8
+MICRO_GAP = 3
 
 
 class _Tee:
@@ -67,7 +74,7 @@ def start_ollama():
     force_cpu = config.get("processing", {}).get("force_cpu", False)
     import torch
     if torch.cuda.is_available() and not force_cpu:
-        model_to_use = ollama_config.get("gpu_model", "qwen3:14b")
+        model_to_use = ollama_config.get("gpu_model", "qwen3.8-27b-iq3:latest")
         print(f"\n Using GPU model '{model_to_use}' for advert detection \n", flush=True)
     else:
         model_to_use = ollama_config.get("cpu_model", "qwen3:8b")
@@ -152,10 +159,10 @@ def parse_srt_blocks(srt_blocks_raw):
     return parsed
 
 
-def ask_pod_isolation(url, model, blocks_subset, podcast_title=""):
-    """Queries Ollama with PROMPT_POD_ISOLATION for a targeted segment of blocks."""
-    min_idx = blocks_subset[0]['idx']
-    max_idx = blocks_subset[-1]['idx']
+def query_macro_window(url, model, blocks_subset, podcast_title=""):
+    """Queries Ollama with PROMPT_POD_ISOLATION for a macro-window of blocks."""
+    min_idx = blocks_subset[0]["idx"]
+    max_idx = blocks_subset[-1]["idx"]
     transcript_text = "\n".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
 
     user_msg = (
@@ -181,7 +188,7 @@ def ask_pod_isolation(url, model, blocks_subset, podcast_title=""):
                     "think": False,
                     "options": {
                         "temperature": 0.0 + (0.2 * attempt),
-                        "num_ctx": 8192
+                        "num_ctx": 16384
                     }
                 },
                 timeout=120
@@ -197,10 +204,68 @@ def ask_pod_isolation(url, model, blocks_subset, podcast_title=""):
                     return data
         except Exception as e:
             if attempt == max_retries - 1:
-                print(f"  [Pod Isolation Error]: {e}", flush=True)
-            time.sleep(2)
+                print(f"  [Window Error {min_idx}-{max_idx}]: {e}", flush=True)
+            time.sleep(1)
 
     return {"analysis": "Error", "ad_pods": []}
+
+
+def query_boundary(url, model, blocks_subset, podcast_title=""):
+    """Queries Ollama with PROMPT_BOUNDARY_VERIFICATION to refine exact pod boundaries."""
+    min_idx = blocks_subset[0]["idx"]
+    max_idx = blocks_subset[-1]["idx"]
+    transcript_text = "\n".join(f"[{b['idx']}] {b['text']}" for b in blocks_subset)
+    user_msg = (
+        f"CURRENT PODCAST TITLE: '{podcast_title}'\n\n"
+        f"Transcript Segment (Blocks {min_idx} to {max_idx}):\n{transcript_text}\n\n"
+        f"Determine the EXACT start_idx and end_idx of the commercial break / promotional segment "
+        f"in this transcript. Output ONLY the requested JSON object."
+    )
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                url,
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": PROMPT_BOUNDARY_VERIFICATION},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "format": "json",
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": 0.0 + (0.2 * attempt), "num_ctx": 8192},
+                },
+                timeout=120,
+            )
+            if r.status_code == 200:
+                content = r.json().get("message", {}).get("content", "").strip()
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                data = json.loads(content)
+                if isinstance(data, dict) and "start_idx" in data and "end_idx" in data:
+                    return int(data["start_idx"]), int(data["end_idx"]), data.get("analysis", "")
+        except Exception as e:
+            if attempt == 2:
+                print(f"    [Boundary Error]: {e}", flush=True)
+            time.sleep(1)
+    return None
+
+
+def merge_and_bridge(intervals, gap=MICRO_GAP):
+    """Merges overlapping / contiguous intervals and bridges micro-gaps."""
+    if not intervals:
+        return []
+    intervals = sorted(intervals)
+    merged = [list(intervals[0])]
+    for s, e in intervals[1:]:
+        if s <= merged[-1][1] + 1 + gap:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [tuple(m) for m in merged]
 
 
 def _format_pod_title_and_category(p):
@@ -217,7 +282,7 @@ def _format_pod_title_and_category(p):
 
     if not p_category:
         lower_text = (s_combined + " " + (p_title or "")).lower()
-        if any(w in lower_text for w in ["promo", "trailer", "podcast", "cross-promo", "other show", "preview", "observer"]):
+        if any(w in lower_text for w in ["promo", "trailer", "podcast", "cross-promo", "other show", "preview"]):
             p_category = "podcast_promotion"
         else:
             p_category = "sponsor_read"
@@ -249,7 +314,7 @@ def detect_adverts(srt_file, raw_folder):
 
     srt_path = os.path.join(raw_folder, srt_file)
     ad_path = srt_path.replace(".srt", ".ad")
-    print(f"\nDetecting adverts for {srt_file}...", flush=True)
+    print(f"\nDetecting adverts for {srt_file} using {model_to_use}...", flush=True)
 
     try:
         with open(srt_path, "r", encoding="utf-8") as f:
@@ -270,8 +335,9 @@ def detect_adverts(srt_file, raw_folder):
 
     total = len(blocks)
     blocks_map = {b['idx']: b for b in blocks}
+    first_idx, last_idx = blocks[0]['idx'], blocks[-1]['idx']
 
-    # Robust podcast title resolution
+    # Podcast title resolution
     podcast_title = os.path.basename(os.path.dirname(raw_folder)).replace("-", " ").title()
     if podcast_title.lower() in ("data", "proto results", "local results", ""):
         for root, dirs, files in os.walk("data"):
@@ -280,287 +346,128 @@ def detect_adverts(srt_file, raw_folder):
                 break
     print(f"Identified Podcast: '{podcast_title}' ({total} blocks)", flush=True)
 
-    # --- SPEAKER STATISTICS ---
-    spk_counts = Counter(b['spk'] for b in blocks if b['spk'] and b['spk'] != "MUSIC/NOISE")
-    total_spk_blocks = sum(spk_counts.values()) or 1
-    spk_share = {k: v / total_spk_blocks for k, v in spk_counts.items()}
-    rare_speakers = {k for k, share in spk_share.items() if share < 0.05}
-
-    # --- PHASE 0: COARSE "SUSPICION" PASS ---
-    print("\n--- Phase 0: Coarse Suspicion Pass ---", flush=True)
-    suspicion_scores = {}
-    coarse_chunk_size = 50
-    coarse_step = 30
-
-    def process_coarse_chunk(i):
-        chunk = blocks[i:i+coarse_chunk_size]
-        if not chunk:
-            return None
-        text = "\n".join(f"[{b['idx']}] {b['text']}" for b in chunk)
-        for attempt in range(3):
-            try:
-                r = requests.post(
-                    ollama_url,
-                    json={
-                        "model": model_to_use,
-                        "messages": [
-                            {"role": "system", "content": PROMPT_SUSPICION},
-                            {"role": "user", "content": f"Transcript chunk:\n{text}"}
-                        ],
-                        "format": "json",
-                        "stream": False,
-                        "think": False,
-                        "options": {
-                            "temperature": 0.0,
-                            "num_ctx": 4096,
-                            "num_predict": 200,
-                            "stop": ["</s>", "<|im_end|>", "<|endoftext|>"]
-                        }
-                    },
-                    timeout=120
-                )
-                if r.status_code == 200:
-                    content = r.json().get("message", {}).get("content", "").strip()
-                    data = json.loads(content)
-                    return {
-                        "chunk": chunk,
-                        "score": data.get("suspicion_score", 1),
-                        "reasoning": data.get("reasoning", "")
-                    }
-            except Exception:
-                time.sleep(1)
-        return {"chunk": chunk, "score": 1, "reasoning": "Error"}
-
-    # Submit coarse chunks in parallel (max_workers=2 to prevent Ollama saturation)
-    futures_map = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        for i in range(0, total, coarse_step):
-            if not blocks[i:i+coarse_chunk_size]:
-                break
-            future = executor.submit(process_coarse_chunk, i)
-            futures_map[future] = i
-
-        for future in concurrent.futures.as_completed(futures_map):
-            res = future.result()
-            if not res or "error" in res:
-                continue
-            chunk = res["chunk"]
-            score = res["score"]
-            reasoning = res["reasoning"]
-            c_start, c_end = chunk[0]['idx'], chunk[-1]['idx']
-            if score >= 4:
-                print(f"Scanning blocks {c_start} to {c_end}... SUSPICIOUS (Score: {score}) - {reasoning[:60]}...", flush=True)
-                for b in chunk:
-                    suspicion_scores[b["idx"]] = max(suspicion_scores.get(b["idx"], 0), score)
-
-    # Pre-roll guard: always check blocks 1 to 40 if rare voice, music, or sponsor cue is present
-    first_blocks = blocks[:20]
-    has_cold_cue = any(
-        b['spk'] in rare_speakers or
-        b['spk'] == 'MUSIC/NOISE' or
-        any(w in b['text'].lower() for w in ['presented by', 'brought to you', 'sponsor', 'partner'])
-        for b in first_blocks
-    )
-    if has_cold_cue:
-        for b in blocks[:40]:
-            suspicion_scores[b['idx']] = max(suspicion_scores.get(b['idx'], 0), 6)
-
-    # Post-roll guard: if last 25 blocks contain a rare voice or promo cues, flag for check
-    if len(blocks) > 40:
-        tail_blocks = blocks[-25:]
-        has_tail_cue = any(b['spk'] in rare_speakers for b in tail_blocks)
-        if has_tail_cue:
-            for b in tail_blocks:
-                suspicion_scores[b['idx']] = max(suspicion_scores.get(b['idx'], 0), 5)
-
-    # Cluster suspicious blocks
-    clusters = []
-    if suspicion_scores:
-        sorted_suspicious = sorted(list(suspicion_scores.keys()))
-        curr = [sorted_suspicious[0]]
-        for idx in sorted_suspicious[1:]:
-            if idx <= curr[-1] + 25:
-                curr.append(idx)
-            else:
-                clusters.append(curr)
-                curr = [idx]
-        clusters.append(curr)
-
-    print(f"\nCoarse Pass identified {len(clusters)} suspicious region(s).", flush=True)
-
-    # --- PHASE 1: DIRECT POD ISOLATION ---
-    print("\n--- Phase 1: Direct Pod Isolation ---", flush=True)
-    detected_ad_blocks = set()
-    episode_sponsors = set()
     block_meta = {b['idx']: {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False} for b in blocks}
 
-    for c in clusters:
-        c_min = c[0]
-        c_max = c[-1]
+    # --- STAGE 1: MACRO-WINDOW SCAN ---
+    num_windows = (total + STEP_SIZE - 1) // STEP_SIZE
+    print(f"\n--- Stage 1: Macro-Window Scan ({total} blocks in ~{num_windows} windows) ---", flush=True)
+    t0 = time.time()
+    raw_intervals = []
+    pod_meta = {}  # (clamped_s, clamped_e) -> list of sponsors
 
-        start_context = 1 if c_min <= 25 else max(1, c_min - 20)
-        end_context = min(total, c_max + 25)
+    for i in range(0, total, STEP_SIZE):
+        sub_blocks = blocks[i:i + WINDOW_SIZE]
+        if not sub_blocks:
+            break
 
-        # Sub-window sliding for candidate regions (keeps LLM within high-attention window)
-        max_pod_window = 50
-        pod_step = 25
+        min_b = sub_blocks[0]["idx"]
+        max_b = sub_blocks[-1]["idx"]
+        print(f"  -> Window {min_b} to {max_b} ({len(sub_blocks)} blocks)...", end=" ", flush=True)
 
-        sub_windows = []
-        if (end_context - start_context + 1) <= max_pod_window:
-            sub_windows.append((start_context, end_context))
+        w_t0 = time.time()
+        res = query_macro_window(ollama_url, model_to_use, sub_blocks, podcast_title)
+        w_elapsed = time.time() - w_t0
+
+        pods = res.get("ad_pods", [])
+        if pods:
+            found_str = ", ".join(f"[{p.get('start_idx')}-{p.get('end_idx')}: {p.get('sponsors', [])}]" for p in pods)
+            print(f"FOUND AD ({w_elapsed:.1f}s): {found_str}", flush=True)
+            for p in pods:
+                s = p.get("start_idx")
+                e = p.get("end_idx")
+                sponsors = p.get("sponsors", [])
+                if isinstance(s, int) and isinstance(e, int) and s > 0 and e >= s:
+                    clamped_s = max(s, min_b)
+                    clamped_e = min(e, max_b)
+                    raw_intervals.append((clamped_s, clamped_e))
+                    pod_meta[(clamped_s, clamped_e)] = sponsors
         else:
-            if start_context == 1 and end_context > 40:
-                sub_windows.append((1, min(total, 35)))
-                w_start = 12
+            print(f"Clean ({w_elapsed:.1f}s)", flush=True)
+
+    stage1_elapsed = time.time() - t0
+    initial_pods = merge_and_bridge(raw_intervals)
+    print(f"Stage 1 completed in {stage1_elapsed:.1f}s. Identified {len(initial_pods)} candidate pod(s): {initial_pods}", flush=True)
+
+    if not initial_pods:
+        print("No ads detected. Writing empty .ad file.", flush=True)
+        with open(ad_path, "w", encoding="utf-8") as f:
+            pass
+        return
+
+    # --- STAGE 2: BOUNDARY VERIFICATION REFINEMENT ---
+    print(f"\n--- Stage 2: Boundary Verification Refinement (+/- {EDGE_MARGIN} blocks) ---", flush=True)
+    t1 = time.time()
+    refined_pods = []
+
+    for s, e in initial_pods:
+        lo = max(first_idx, s - EDGE_MARGIN)
+        hi = min(last_idx, e + EDGE_MARGIN)
+        sub_blocks = [blocks_map[i] for i in range(lo, hi + 1) if i in blocks_map]
+        res = query_boundary(ollama_url, model_to_use, sub_blocks, podcast_title)
+
+        if res is None:
+            print(f"  Pod {s}-{e}: Refinement call failed -> keeping original boundary", flush=True)
+            refined_pods.append((s, e))
+            continue
+
+        rs, re_, analysis = res
+        if rs == -1 or re_ == -1:
+            # Check if this candidate had confirmed external sponsors or was an ambiguous false positive
+            sponsors = []
+            for (ps, pe), sps in pod_meta.items():
+                if ps <= e and pe >= s:
+                    sponsors.extend(sps)
+            clean_sponsors = [str(sp).strip() for sp in sponsors if str(sp).strip()]
+            if clean_sponsors:
+                print(f"  Pod {s}-{e}: Verifier suggested no ad, but external sponsors {clean_sponsors} found -> keeping", flush=True)
+                refined_pods.append((s, e))
             else:
-                w_start = start_context
+                print(f"  Pod {s}-{e}: Verifier pruned false-positive pod (no sponsors) | {analysis[:90]}", flush=True)
+            continue
 
-            while w_start <= end_context:
-                w_end = min(end_context, w_start + max_pod_window - 1)
-                sub_windows.append((w_start, w_end))
-                if w_end == end_context:
-                    break
-                w_start += pod_step
+        # Clamp refined boundaries to safety margins around the initial detection
+        rs = max(lo, min(s + EDGE_MARGIN, rs))
+        re_ = min(hi, max(e - EDGE_MARGIN, re_))
 
-        for w_s, w_e in sub_windows:
-            w_blocks = [blocks_map[i] for i in range(w_s, w_e + 1) if i in blocks_map]
-            if not w_blocks:
-                continue
+        if rs > re_ or re_ < s or rs > e:
+            print(f"  Pod {s}-{e}: Refined {rs}-{re_} invalid -> keeping original", flush=True)
+            refined_pods.append((s, e))
+            continue
 
-            print(f"\nAnalyzing candidate window {w_s} to {w_e}...", flush=True)
-            res = ask_pod_isolation(ollama_url, model_to_use, w_blocks, podcast_title)
+        tag = "unchanged" if (rs, re_) == (s, e) else f"start {rs - s:+d}, end {re_ - e:+d}"
+        print(f"  Pod {s}-{e} -> {rs}-{re_} ({tag})", flush=True)
+        refined_pods.append((rs, re_))
 
-            analysis = res.get("analysis", "")
-            pods = res.get("ad_pods", [])
+    stage2_elapsed = time.time() - t1
+    print(f"Stage 2 completed in {stage2_elapsed:.1f}s.", flush=True)
 
-            print(f"  Analysis: {analysis[:120]}...", flush=True)
-            if pods:
-                for p in pods:
-                    p_start = p.get("start_idx", -1)
-                    p_end = p.get("end_idx", -1)
-                    p_sponsors = p.get("sponsors", [])
-                    if p_start != -1 and p_end != -1 and p_start <= p_end:
-                        # Auto-correct dropped-digit typo (e.g. 57 -> 570 in window [561, 620])
-                        if p_start < w_s and (p_start * 10) >= w_s and (p_start * 10) <= w_e:
-                            p_start = p_start * 10
-                        if p_end < w_s and (p_end * 10) >= w_s and (p_end * 10) <= w_e:
-                            p_end = p_end * 10
-
-                        # Strictly clamp returned pod indices to active candidate window
-                        p_start = max(w_s, min(w_e, p_start))
-                        p_end = max(w_s, min(w_e, p_end))
-                        if p_start > p_end:
-                            continue
-
-                        # Filter out false positive pods where the sole sponsor is the current podcast title itself
-                        clean_sponsors = [str(s).strip() for s in p_sponsors if str(s).strip()]
-                        if podcast_title and clean_sponsors and all(s.lower() == podcast_title.lower() or s.lower() in podcast_title.lower() for s in clean_sponsors):
-                            print(f"  -> SKIPPING SELF-SHOW POD: '{clean_sponsors}' matches current podcast '{podcast_title}'", flush=True)
-                            continue
-
-                        print(f"  -> AD POD FOUND: Blocks {p_start} to {p_end} | Sponsors: {p_sponsors}", flush=True)
-                        p_cat, p_title = _format_pod_title_and_category(p)
-                        for idx in range(p_start, p_end + 1):
-                            detected_ad_blocks.add(idx)
-                            if idx not in block_meta or not block_meta[idx]['is_flagged']:
-                                block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
-                        for s in p_sponsors:
-                            if isinstance(s, str) and len(s) > 2:
-                                s_clean = s.strip().lower()
-                                if not podcast_title or (s_clean != podcast_title.lower() and s_clean not in podcast_title.lower()):
-                                    episode_sponsors.add(s_clean)
-            else:
-                print("  -> No ad pod in this window (Show content confirmed).", flush=True)
-
-    # --- PHASE 2: EPISODE-LEVEL SPONSOR RE-MENTION CHECK ---
-    if episode_sponsors:
-        print(f"\n--- Episode Sponsor Memory Check for: {list(episode_sponsors)} ---", flush=True)
-        for sponsor in episode_sponsors:
-            for b in blocks:
-                if b['idx'] not in detected_ad_blocks and sponsor in b['text'].lower():
-                    print(f"  Re-mention of '{sponsor}' at block {b['idx']}! Reviewing surrounding context...", flush=True)
-                    recheck_start = max(1, b['idx'] - 15)
-                    recheck_end = min(total, b['idx'] + 25)
-                    recheck_blocks = [blocks_map[i] for i in range(recheck_start, recheck_end + 1) if i in blocks_map]
-                    res = ask_pod_isolation(ollama_url, model_to_use, recheck_blocks, podcast_title)
-                    for p in res.get("ad_pods", []):
-                        p_start = p.get("start_idx", -1)
-                        p_end = p.get("end_idx", -1)
-                        if p_start != -1 and p_end != -1 and p_start <= p_end:
-                            p_start = max(recheck_start, min(recheck_end, p_start))
-                            p_end = max(recheck_start, min(recheck_end, p_end))
-                            if p_start > p_end:
-                                continue
-
-                            # Filter out false positive pods where the sole sponsor is the current podcast title itself
-                            clean_sponsors = [str(s).strip() for s in p.get("sponsors", []) if str(s).strip()]
-                            if podcast_title and clean_sponsors and all(s.lower() == podcast_title.lower() or s.lower() in podcast_title.lower() for s in clean_sponsors):
-                                continue
-
-                            print(f"  -> ADDED AD POD FROM RE-MENTION: Blocks {p_start} to {p_end}", flush=True)
-                            p_cat, p_title = _format_pod_title_and_category(p)
-                            for idx in range(p_start, p_end + 1):
-                                detected_ad_blocks.add(idx)
-                                if idx not in block_meta or not block_meta[idx]['is_flagged']:
-                                    block_meta[idx] = {'category': p_cat, 'title': p_title, 'is_flagged': True}
-
-    # --- GAP BRIDGING ---
-    # 1. Micro-gaps <= 3 blocks within an ad pod (music stingers, chimes, breathers)
-    # 2. Inter-ad / container gaps <= 35 blocks sandwiched between two confirmed ads
-    #    (e.g. dramatic trailer cold hooks like 'Bear Hunt' which are ~21-25 blocks, or commercial spots like 'McDonald's')
-    #    unless the gap contains an explicit show return/greeting.
-    sorted_ads = sorted(list(detected_ad_blocks))
+    # --- STAGE 3: CLEANING, TOPIC MAP & OUTPUT ---
+    final_pods = merge_and_bridge(refined_pods)
     final_ads = set()
-    if sorted_ads:
-        current = sorted_ads[0]
-        final_ads.add(current)
-        for idx in sorted_ads[1:]:
-            gap_len = idx - current - 1
-            should_bridge = False
-            if gap_len <= 3:
-                should_bridge = True
-            elif gap_len <= 35:
-                gap_blocks = [blocks_map[i] for i in range(current + 1, idx) if i in blocks_map]
-                resumption_cues = ["welcome back", "welcome to", "hello and welcome", "back to the show", "part two", "part 2"]
-                has_resumption = any(any(cue in b['text'].lower() for cue in resumption_cues) for b in gap_blocks)
-                if not has_resumption:
-                    should_bridge = True
-
-            if should_bridge:
-                for fill in range(current + 1, idx):
-                    final_ads.add(fill)
-                    if current in block_meta:
-                        block_meta[fill] = dict(block_meta[current])
-            final_ads.add(idx)
-            current = idx
-
-    # Ensure metadata consistency for all final_ads and unflagged blocks
-    for idx in final_ads:
-        if idx not in block_meta or not block_meta[idx]['is_flagged']:
-            block_meta[idx] = {'category': 'sponsor_read', 'title': 'Sponsor Read', 'is_flagged': True}
+    for s, e in final_pods:
+        for idx in range(s, e + 1):
+            if idx in blocks_map:
+                final_ads.add(idx)
+                block_meta[idx] = {'category': 'sponsor_read', 'title': 'Commercial Break', 'is_flagged': True}
 
     for b in blocks:
-        idx = b['idx']
-        if idx not in final_ads:
-            block_meta[idx] = {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False}
+        if b['idx'] not in final_ads:
+            block_meta[b['idx']] = {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False}
 
     # Rebuild contiguous clean_topics for topic map display
     clean_topics = []
     if blocks:
-        first_idx = blocks[0]['idx']
-        curr_meta = block_meta.get(first_idx, {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False})
+        curr_meta = block_meta[blocks[0]['idx']]
         current_cat = curr_meta['category']
         current_title = curr_meta['title']
         current_flagged = curr_meta['is_flagged']
-        current_start = first_idx
-        current_end = first_idx
+        current_start = blocks[0]['idx']
+        current_end = blocks[0]['idx']
 
         for b in blocks[1:]:
             idx = b['idx']
-            m = block_meta.get(idx, {'category': 'show_content', 'title': 'Show Content', 'is_flagged': False})
-            cat = m['category']
-            title = m['title']
-            flagged = m['is_flagged']
+            m = block_meta[idx]
+            cat, title, flagged = m['category'], m['title'], m['is_flagged']
 
             if cat == current_cat and title == current_title and flagged == current_flagged and idx == current_end + 1:
                 current_end = idx
@@ -573,11 +480,8 @@ def detect_adverts(srt_file, raw_folder):
                     "confidence": "certain",
                     "is_flagged": current_flagged
                 })
-                current_cat = cat
-                current_title = title
-                current_flagged = flagged
-                current_start = idx
-                current_end = idx
+                current_cat, current_title, current_flagged = cat, title, flagged
+                current_start = current_end = idx
 
         clean_topics.append({
             "start_idx": current_start,
@@ -588,30 +492,20 @@ def detect_adverts(srt_file, raw_folder):
             "is_flagged": current_flagged
         })
 
-    # --- PRINT TOPIC MAP TABLE ---
+    # Print topic map
     print("\n--- GENERATED TOPIC MAP ---", flush=True)
     print(f"{'Start':<6} | {'End':<6} | {'Duration':<8} | {'Category':<18} | {'Title'}", flush=True)
     print("-" * 100, flush=True)
-
     for t in clean_topics:
         duration = t["end_idx"] - t["start_idx"] + 1
-        is_flagged = t["is_flagged"]
-        confidence = t.get("confidence", "certain")
-
-        flagged_str = " [FLAGGED]" if is_flagged else ""
-        conf_str = f"[{confidence.upper()[:3]}]" if confidence != "certain" else "     "
-        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} | {conf_str} {t['title']}{flagged_str}", flush=True)
-
+        flagged_str = " [FLAGGED]" if t["is_flagged"] else ""
+        print(f"{t['start_idx']:<6} | {t['end_idx']:<6} | {duration:<8} | {t['category']:<18} |      {t['title']}{flagged_str}", flush=True)
     print("-" * 100, flush=True)
 
     print(f"\nFinal detected advert blocks: {len(final_ads)}", flush=True)
 
-    # Filter and write matching blocks to the .ad file
-    ad_blocks = []
-    for b in blocks:
-        if b['idx'] in final_ads:
-            ad_blocks.append(b['raw'])
-
+    # Write .ad file
+    ad_blocks = [blocks_map[i]["raw"] for i in sorted(final_ads) if i in blocks_map]
     if ad_blocks:
         with open(ad_path, "w", encoding="utf-8") as f:
             f.write("\n\n".join(ad_blocks) + "\n\n")
@@ -622,32 +516,26 @@ def detect_adverts(srt_file, raw_folder):
         print("No ads detected. Created empty .ad file.", flush=True)
 
     # Calculate removal statistics
-    if blocks and len(blocks) > 0:
-        total_podcast_time = blocks[-1]['end_time'] - blocks[0]['start_time']
-        total_ad_time = 0.0
-
-        ad_blocks_data = [b for b in blocks if b['idx'] in final_ads]
-        if ad_blocks_data:
-            current_start = ad_blocks_data[0]['start_time']
-            current_end = ad_blocks_data[0]['end_time']
-            last_idx = ad_blocks_data[0]['idx']
-
-            for b in ad_blocks_data[1:]:
-                if b['idx'] == last_idx + 1:
-                    current_end = b['end_time']
+    if blocks:
+        total_time = blocks[-1]['end_time'] - blocks[0]['start_time']
+        ad_time = 0.0
+        if final_ads:
+            sorted_ad_blocks = [blocks_map[i] for i in sorted(final_ads) if i in blocks_map]
+            c_start = sorted_ad_blocks[0]['start_time']
+            c_end = sorted_ad_blocks[0]['end_time']
+            last_i = sorted_ad_blocks[0]['idx']
+            for b in sorted_ad_blocks[1:]:
+                if b['idx'] == last_i + 1:
+                    c_end = b['end_time']
                 else:
-                    total_ad_time += (current_end - current_start)
-                    current_start = b['start_time']
-                    current_end = b['end_time']
-                last_idx = b['idx']
+                    ad_time += (c_end - c_start)
+                    c_start = b['start_time']
+                    c_end = b['end_time']
+                last_i = b['idx']
+            ad_time += (c_end - c_start)
 
-            total_ad_time += (current_end - current_start)
-
-        if total_podcast_time > 0:
-            percentage = (total_ad_time / total_podcast_time) * 100
-            print(f"Percentage of podcast flagged for removal: {percentage:.1f}%\n", flush=True)
-        else:
-            print("Percentage of podcast flagged for removal: 0.0%\n", flush=True)
+        pct = (ad_time / total_time * 100) if total_time > 0 else 0.0
+        print(f"Percentage of podcast flagged for removal: {pct:.1f}%\n", flush=True)
 
 
 def detect_all_adverts():
@@ -696,3 +584,10 @@ def detect_all_adverts():
         print("No unprocessed .srt files found")
         tee.close()
         allow_standby()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 2:
+        detect_adverts(sys.argv[1], sys.argv[2])
+    else:
+        detect_all_adverts()

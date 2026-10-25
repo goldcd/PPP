@@ -1,10 +1,12 @@
 # Perfect Podcast Proxy
 
 ## Version
+- 2.1
+  - Upgraded advert detection to high-accuracy Two-Stage Macro-Window + Boundary Verification pipeline
+  - Upgraded default GPU model to Qwen 3.8 27B (IQ3_S MTP)
 - 2.0
   - Upgraded transcription to include diarization (WhisperX + pyannote)
-  - Upgraded to three-pass advert dection, dramatically improving accuracy
-  - I might be done with this. I think this is the best we can get locally
+  - Upgraded to three-pass advert detection, dramatically improving accuracy
 
 ## Purpose
 
@@ -97,23 +99,16 @@ Start  | End    | Duration | Category           | Title
 ----------------------------------------------------------------------------------------------------
 ```
 
-## Multi-pass Advert detection Process
+## Advert Detection Process
 
-The system utilizes a coarse-to-fine ensemble approach to maximize accuracy and minimize false positives/negatives. The workflow consists of four main passes:
+The system utilizes a high-precision, two-stage advert detection pipeline using modern LLMs (e.g., Qwen 3.8 27B / Qwen 2.5):
 
-* **Pass 1: Fast Scan (Zero-Shot)**
-  A fast local decision model acts as a "metal detector" over a rolling window. It quickly scans for highly probable advert characteristics and flags "hot blocks". This identifies the areas where we need to investigate in details
+* **Stage 1: Macro-Window Commercial Pod Isolation**
+  The transcript is processed in overlapping macro-windows of 120 subtitle blocks (~8–10 minutes) with a step of 90 blocks. This macro-context ensures the model sees the entire commercial break container (including multiple stacked sponsors, promotional trailers, and surrounding show transitions) in a single view, preventing attention loss and avoiding cutting ads in half.
 
-* **Pass 2: Generative Pass (Topic Mapping)**
-  Rather than processing the entire transcript, the model focuses exclusively on the "hot block" clusters. It runs heavily overlapping chunking and topic-mapping strategy on these localized regions to precisely partition them into segments like `show_content` and `sponsor_read`
+* **Stage 2: Targeted Boundary Verification Refinement**
+  For each detected commercial break pod, a focused boundary verification pass is executed on a narrow window (+/- 8 blocks) around the candidate edges. This stage snaps start and end boundaries down to the exact subtitle line, trims trailing host banter, and prunes false-positive candidates that contain no external sponsors.
 
-* **Pass 3: Gap Review (Merge Check)**
-  The system identifies "uncertain" blocks or gaps sandwiched between known sponsored segments. It asks the LLM to re-evaluate these specific regions with full surrounding context to determine if they are part of a sponsored conversation and should be merged. i.e. If there's 30 seconds of what could be an advert, between two definite adverts - it's probably also advert
-
-* **Pass 4: Boundary Verification**
-  For segments identified as adverts, a final targeted review of the surrounding context is performed. This pass forces the model to refine the exact start and end boundaries, ensuring no show content is accidentally excised and no ad intro/outro bleeds through. This includes advert wrapper sections like "After the break we'll be talking about xyz", as you'll be going straight to this
-
-
-
-
+* **Stage 3: Micro-Gap Bridging & Excision Mapping**
+  Small micro-gaps (<= 3 blocks) caused by music stingers, transition sound effects, or breathers between consecutive adverts are bridged into a single clean cut. The resulting `.ad` excision file is generated alongside the original `.srt`.
 
