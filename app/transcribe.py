@@ -95,6 +95,10 @@ def transcribe_all():
             if os.path.exists(raw_folder):
                 for mp3_file in os.listdir(raw_folder):
                     if mp3_file.endswith(".mp3"):
+                        mp3_path = os.path.join(raw_folder, mp3_file)
+                        if os.path.getsize(mp3_path) < 10240:
+                            print(f"Skipping corrupt or empty audio file ({os.path.getsize(mp3_path)} bytes): {mp3_file}")
+                            continue
                         transcribed_file = os.path.join(raw_folder, mp3_file.replace(".mp3", ".srt"))
                         if not os.path.exists(transcribed_file):
                             files_to_transcribe.append((mp3_file, raw_folder))
@@ -141,7 +145,11 @@ def transcribe_all():
 
     # Process all files
     for mp3_file, raw_folder in files_to_transcribe:
-        transcribe(mp3_file, raw_folder, model=model, diarize_model=diarize_model, device=device)
+        try:
+            transcribe(mp3_file, raw_folder, model=model, diarize_model=diarize_model, device=device)
+        except Exception as e:
+            print(f"\n Error transcribing {mp3_file} in {raw_folder}: {e}")
+            print("Skipping and continuing with remaining files...\n")
         
     # Unload models after batch
     print("Batch complete. Unloading transcription models from GPU memory...")
